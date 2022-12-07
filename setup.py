@@ -16,8 +16,8 @@ VERSION = '0.1.0'
 
 # What packages are required for this module to be executed?
 REQUIRED = [
-    "pyqt5==5.15.7",
-    "qimage2ndarray==1.9.0"
+    # "pyqt5==5.15.7",
+    # "qimage2ndarray==1.9.0"
 ]
 
 # What packages are optional?

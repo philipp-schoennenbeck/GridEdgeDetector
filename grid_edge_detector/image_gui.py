@@ -20,7 +20,9 @@ import numpy as np
 import psutil
 from time import sleep
 import random
-import carbon_edge_detector as ced
+# import carbon_edge_detector as ced
+import grid_edge_detector as ced
+# import ced
 from skimage.draw import disk
 import toml
 # from carbon_edge_detector
@@ -639,15 +641,38 @@ class runWidget(QFrame):
         global CURRENTLY_RUNNING
         CURRENTLY_RUNNING = value
 
+class legendWidget(QWidget):
+    def __init__(self, parent):
+        super().__init__(parent)
+        self.setLayout(QVBoxLayout)
+
+        self.legends = (("red", "Not masked yet"), ("yellow", "Below threshold, no mask"), ("green", "Edge was found"))
+        # self.colorLabels = {}
+        # self.descLabels = {}
+        for (color, title) in self.legends:
+            new_pixmap = QPixmap(10,10)
+            new_pixmap.fill(QColor(color))
+            newColorLabel = QLabel(self)
+            newColorLabel.setPixmap(new_pixmap)
+
+            newDescLabel = QLabel(self, text=title)
+            newLayout = QHBoxLayout()
+            newLayout.addWidget(newColorLabel)
+            newLayout.addWidget(newDescLabel)
+            self.layout().addLayout(newLayout)
+
+
 
 class rightWidget(QWidget):
     def __init__(self, parent) -> None:
         super().__init__(parent)
+        self.legendWidget = legendWidget(self)
         self.histWidget = histWidget(self)
         self.thumbnailWidget = thumbnailWidget(self)
         self.metadataWidget = metadataWidget(self)
         self.runWidget = runWidget(self)
         self.setLayout(QVBoxLayout())
+        self.layout().addWidget(self.legendWidget)
         self.layout().addWidget(self.histWidget)
         self.layout().addWidget(self.thumbnailWidget)
         self.layout().addWidget(self.metadataWidget)
@@ -918,8 +943,8 @@ def getDisableEverythingFunction(window):
 
     return disableEverything
 
-
-if __name__ == "__main__":
+def main():
+    global CURRENT_CONFIG, DISABLE_FUNCTION
     CURRENT_CONFIG = load_config_file()
     
     app = QApplication(sys.argv)
@@ -927,3 +952,6 @@ if __name__ == "__main__":
     DISABLE_FUNCTION = getDisableEverythingFunction(window)
     window.show()
     app.exec_()
+
+if __name__ == "__main__":
+    main()
