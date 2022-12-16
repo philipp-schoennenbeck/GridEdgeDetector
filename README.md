@@ -3,6 +3,10 @@
 ## Install
 
 Clone this repository
+if it is still private and on gitfront:
+```git clone https://gitfront.io/r/user-3938527/apXmqbHe5EPC/GridEdgeDetector.git```
+
+otherwise:
 ```git clone https://github.com/Croxa/GridEdgeDetector```
 
 Move into repository
