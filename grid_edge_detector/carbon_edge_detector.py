@@ -5,18 +5,31 @@ import mrcfile
 from skimage.draw import disk
 from scipy.signal import convolve
 from pathlib import Path
-
+from PIL import Image
 from matplotlib import pyplot as plt
 
 
-def mask_carbon_edge_per_file(path, gridsizes, cut_off, ps, circles=None, idx=None, get_hist_data=False):
+def mask_carbon_edge_per_file(path, gridsizes, cut_off, ps, circles=None, idx=None, get_hist_data=False, to_resize=False, resize=7):
     if isinstance(path, (str, Path)):
-        image = mrcfile.open(path, permissive=True).data*1
+        path = Path(path)
+        if path.suffix in [".mrc", ".MRC", ".rec", ".REC"]:
+            image = mrcfile.open(path, permissive=True).data*1
+        else:
+            image = np.array(Image.open(path).convert("L"))
     else:
         image = path
     data = image - np.mean(image)
     data /= np.std(data)
     
+    if to_resize:
+        original_ps = ps
+        original_shape = data.shape
+        ratio = ps / resize
+        new_shape = None
+        if ratio < 1:
+            new_shape = [int(os * ratio) for os in original_shape]
+            data = np.array(Image.fromarray(data).resize(new_shape[::-1]))
+            ps = resize
 
     differences = []
     coords = []
@@ -51,21 +64,28 @@ def mask_carbon_edge_per_file(path, gridsizes, cut_off, ps, circles=None, idx=No
             coord = coord[0] - circles[gridsize][0].shape[0]//2, coord[1] - circles[gridsize][0].shape[1]//2
 
         differences.append(np.max(diff_image))
+        if to_resize and ratio < 1:
+            coord = (np.array(coord) / ratio).astype(np.int32)
         coords.append(coord)
         convolved_images.append(convolved_image)
         convolved_images_neg.append(convolved_image_neg)
+
         if get_hist_data:
             values, edges = np.histogram(diff_image, bins=50)
+            
             hist_data[gridsize] = {"values":values, "edges":edges, "threshold":cut_off, "center":coord}
 
     argmax = np.argmax(differences)
     coord = coords[argmax]
-    yy,xx = disk(coord, gridsizes[np.argmax(differences)]/ps // 2, shape=data.shape,)
-    mask = np.zeros_like(image, dtype=np.int8)
+    if to_resize and ratio < 1:
+        ps = original_ps
+
+    mask = np.zeros_like(image, dtype=np.uint8)
     if np.max(differences ) > cut_off:
+        yy,xx = disk(coord, gridsizes[np.argmax(differences)]/ps // 2, shape=image.shape,)
         mask[yy,xx] = 1
     else:
-        mask = np.ones_like(image, dtype=np.int8)
+        mask = np.ones_like(image, dtype=np.uint8)
     # if idx is not None:
     #     output = Path("/Data/erc-3/schoennen/membrane_analysis_toolkit/test_code/output_for_progress_report_20221112")
     #     plt.imsave(output / f"{idx}_original.png",image, cmap="gray")

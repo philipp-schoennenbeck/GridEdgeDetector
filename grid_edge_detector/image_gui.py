@@ -4,15 +4,19 @@ import sys
 from collections import namedtuple
 
 from scipy import sparse
+from matplotlib import pyplot as plt
 import subprocess, os, platform
-
+import traceback
 from pyqtgraph import PlotWidget, plot
 import pyqtgraph as pg
 from PyQt5.QtCore import QAbstractTableModel, Qt, QSize, QThread, QObject, pyqtSignal, QModelIndex, QItemSelectionModel
-from PyQt5.QtGui import QImage, QPixmap, QColor, QIntValidator, QDoubleValidator, QPen, QValidator
+
+
+from PyQt5.QtGui import QImage, QPixmap, QColor, QIntValidator, QDoubleValidator, QPen, QValidator, QPalette, QKeySequence
 from PyQt5.QtWidgets import QApplication, QMainWindow, QTableView, QStyledItemDelegate, QWidget, QHBoxLayout, QVBoxLayout, QProgressBar, QPushButton, QGridLayout, QLabel, QLineEdit, QSizePolicy
-from PyQt5.QtWidgets import QMenuBar, QMenu, QFileDialog, QFrame, QTabWidget, QPlainTextEdit
+from PyQt5.QtWidgets import QMenuBar, QMenu, QFileDialog, QFrame, QTabWidget, QPlainTextEdit, QComboBox, QCheckBox, QShortcut, QTextEdit, QMessageBox
 from pathlib import Path
+from PIL import Image
 import multiprocessing as mp
 import mrcfile
 import qimage2ndarray as q2n
@@ -21,7 +25,7 @@ import psutil
 from time import sleep
 import random
 # import carbon_edge_detector as ced
-import grid_edge_detector as ced
+import grid_edge_detector.carbon_edge_detector as ced
 # import ced
 from skimage.draw import disk
 import toml
@@ -39,15 +43,24 @@ CELL_PADDING = 5 # all sides
 MAX_CORES = psutil.cpu_count()
 CURRENTLY_RUNNING = False
 DISABLE_FUNCTION = None
-ALLOWED_SUFFIXES = set([".mrc", ".rec", ".MRC", ".REC"])
+ALLOWED_SUFFIXES = set([".mrc", ".rec", ".MRC", ".REC", ".png", ".jpg", ".jpeg"])
 CONFIG_DIR = Path().home() / ".config" / "GridEdgeDetector"
 if not CONFIG_DIR.exists():
     CONFIG_DIR.mkdir(parents=True)
 
 CONFIG_FILE = CONFIG_DIR / "config.toml"
-DEFAULT_CONFIG = {"title":"Grid edge detector configs", "parameters" :{"threshold":0.02, "gridsize":[2.0], "njobs":1}, "files":{"filedir":str(Path().home()), "addition to file":"_mask"}}
+DEFAULT_CONFIG = {
+    "title":"Grid edge detector configs", 
+    "parameters" :{"threshold":0.02, "gridsizes":[2.0], "njobs":1}, 
+    "files":{"filedir":str(Path().home()), "mask_file_suffix":"_mask","masked_image_file_suffix":"_masked"},
+    "misc":{"colorblind_mode":False}}
 
 CURRENT_CONFIG = None
+COLORS_DEFAULT = {"not yet":"red", "nothing found":"yellow", "mask found":"green"}
+COLORS = {}
+COLORS_ALTERNATIVE = {"not yet":"red", "nothing found":"orange", "mask found":"light blue"}
+
+
 
 def create_default_config_file(overwrite=False):
     if not overwrite:
@@ -101,7 +114,7 @@ def load_config_file():
 
 def reevaluateMask(center, gridsize, ps, shape):
     yy,xx = disk(center, gridsize/ps // 2, shape=shape,)
-    mask = np.zeros(shape, dtype=np.int8)
+    mask = np.zeros(shape, dtype=np.uint8)
     
     mask[yy,xx] = 1
     return mask
@@ -110,20 +123,26 @@ def reevaluateMask(center, gridsize, ps, shape):
 
 
 
-def run_parallel(idx, fn, metadata, threshold):
-    mask, hist_data, gridsize = ced.mask_carbon_edge_per_file(fn, [i * 10000 for i in metadata["Gridsize"]], threshold, metadata["Pixel spacing"], get_hist_data=True)
-    return idx, mask, hist_data, gridsize
+def run_parallel(idx, fn, metadata, to_resize, resize_value):
+    try:
+        mask, hist_data, gridsize = ced.mask_carbon_edge_per_file(fn, [i * 10000 for i in metadata["Gridsize"]], metadata["Threshold"], metadata["Pixel spacing"], get_hist_data=True,to_resize=to_resize, resize=resize_value)
+        return idx, mask, hist_data, gridsize
+    except Exception as e:
+        e = traceback.format_exc()
+        return tuple([e])
 
 class Worker(QObject):
 
     finished = pyqtSignal()
     progress = pyqtSignal(tuple)
-    def __init__(self, indexes, image_datas,threshold, njobs=1):
+    def __init__(self, indexes, image_datas, njobs=1, to_resize=False, resize_value=7):
         super().__init__()
         self.njobs = njobs
         self.indexes = indexes
         self.image_datas = image_datas
-        self.threshold = threshold
+        self.to_resize = to_resize
+        self.resize_value = resize_value
+        # self.threshold = threshold
 
     def run(self):
         def callback(result):
@@ -132,7 +151,7 @@ class Worker(QObject):
 
         with mp.get_context("spawn").Pool(self.njobs) as pool:
 
-            result = [pool.apply_async(run_parallel, [idx, data.fn, data.metadata, self.threshold], callback=callback) for idx, data in zip(self.indexes, self.image_datas)]
+            result = [pool.apply_async(run_parallel, [idx, data.fn, data.metadata,self.to_resize, self.resize_value ], callback=callback) for idx, data in zip(self.indexes, self.image_datas)]
             [res.wait() for res in result]
 
         pool.join()
@@ -155,34 +174,107 @@ class image_data:
     def __init__(self, fn) -> None:
         global CURRENT_CONFIG
         self.fn = Path(fn)
-        with mrcfile.open(fn,permissive=True) as f:
-
-            data = f.data * 1
+        if self.fn.suffix in [".mrc", ".MRC", ".rec", ".REC"]:
+            with mrcfile.open(self.fn,permissive=True) as f:
+                data = f.data * 1
+                self.metadata = {}
+                self.metadata["Dimensions"] = data.shape
+                self.metadata["Pixel spacing"] = float(f.voxel_size["x"])
+                
+        else:
+            data = np.array(Image.open(self.fn).convert("L"))
             self.metadata = {}
             self.metadata["Dimensions"] = data.shape
-            self.metadata["Pixel spacing"] = float(f.voxel_size["x"])
-            self.metadata["Gridsize"] = CURRENT_CONFIG["parameters"]["gridsize"]
+            self.metadata["Pixel spacing"] = 1
+        self.metadata["Gridsize"] = CURRENT_CONFIG["parameters"]["gridsizes"]
+        self.metadata["Threshold"] = CURRENT_CONFIG["parameters"]["threshold"]
+
         
 
-        self.image  = q2n.gray2qimage(data, True)
-        self.mask = None
-        self.original_mask = None
-        self.hist_data = None
-        self.best_gridsize = None
+        self.image_  = q2n.gray2qimage(data, True)
+        self.mask_ = None
+        self.original_mask_ = None
+        self.hist_data_ = None
+        self.best_gridsize_ = None
+        self.changed = True
+        self.found_edge = False
+
+
+    @property
+    def original_image(self):
+        if self.fn.suffix in [".mrc", ".MRC", ".rec", ".REC"]:
+            with mrcfile.open(self.fn,permissive=True) as f:
+                data = f.data * 1   
+        else:
+            data = np.array(Image.open(self.fn).convert("L"))
+        return data
+            
 
     @property
     def title(self):
         return self.fn.name
+        
+
+    @property
+    def image(self):
+        return self.image_
+    
+    @image.setter
+    def image(self, value):
+        self.changed = True
+        self.image_ = value
+    
+    @property
+    def mask(self):
+        return self.mask_
+    
+    @mask.setter
+    def mask(self, value):
+        self.changed = True
+        self.mask_ = value
+    
+    @property
+    def original_mask(self):
+        return self.original_mask_
+    
+    @original_mask.setter
+    def original_mask(self, value):
+        self.changed = True
+        self.found_edge = len(np.unique(value)) > 1
+        self.original_mask_ = value
+
+    @property
+    def hist_data(self):
+        return self.hist_data_
+
+    @hist_data.setter
+    def hist_data(self, value):
+        self.changed = True
+        self.hist_data_ = value
+
+    @property
+    def best_gridsize(self):
+        return self.best_gridsize_
+    
+    @best_gridsize.setter
+    def best_gridsize(self, value):
+        self.changed = True
+        self.best_gridsize_ = value
+    
 
 class PreviewDelegate(QStyledItemDelegate):
 
     def paint(self, painter, option, index):
+        global COLORS
+        
         # data is our preview object
+        
         data = index.model().data(index, Qt.DisplayRole)
         if data is None:
             return
-
-        width = option.rect.width() - CELL_PADDING * 2
+        painter.save()
+        # width = option.rect.width() - CELL_PADDING * 2
+        width = (option.rect.width() - CELL_PADDING * 2) // 2
         height = option.rect.height() - CELL_PADDING * 2
 
         # option.rect holds the area we are painting on the widget (our table cell)
@@ -195,21 +287,32 @@ class PreviewDelegate(QStyledItemDelegate):
         # Position in the middle of the area.
         x = CELL_PADDING + (width - scaled.width()) / 2
         y = CELL_PADDING + (height - scaled.height()) / 2
+
+
         if data.mask is None:
-            
-            color = QColor("red")
+            color = QColor(COLORS["not yet"])
             
         elif data.original_mask is not None and np.min(data.original_mask) == 0:
-            color = QColor("green")
+            color = QColor(COLORS["mask found"])
         else:
-            color = QColor("yellow")
+            color = QColor(COLORS["nothing found"])
         painter.drawImage(option.rect.x() + x, option.rect.y() + y, scaled)
         painter.setPen(QPen(color, 3))
-        painter.drawRect(option.rect.x() + x - 2, option.rect.y() + y - 2, scaled.width() + 4, scaled.height() + 4 )
-
+        painter.drawRect(option.rect.x() + x - 2, option.rect.y() + y - 2, scaled.width() * 2 + 4, scaled.height() + 4 )
+        if data.mask is not None:
+            if data.found_edge:
+                scaled_mask = data.mask.scaled(width, height, aspectRatioMode=Qt.KeepAspectRatio)
+            else:
+                scaled :QImage
+                scaled_mask = scaled.copy()
+                scaled_mask.fill(QColor("white"))
+            # scaled_mask.fill(QColor("white"))
+            painter.drawImage(option.rect.x() + x + scaled.width(), option.rect.y() + y, scaled_mask)
+        
+        painter.restore()
     def sizeHint(self, option, index):
         # All items the same size.
-        return QSize(100, 80)
+        return QSize(160, 80)
 
 
 class customSelectionModel(QItemSelectionModel):
@@ -270,6 +373,7 @@ class ImageViewer(QWidget):
         
         self.view = QTableView()
         
+        
         self.view.horizontalHeader().hide()
         self.view.verticalHeader().hide()
         self.view.setGridStyle(Qt.NoPen)
@@ -281,12 +385,17 @@ class ImageViewer(QWidget):
         
         self.view.setSelectionModel(customSelectionModel(self.model))
         self.view.selectionModel().selectionChanged.connect(self.selectionChanged)
+
+        # palette = QPalette()
+        # palette.setColor(QPalette.Highlight, QColor("red"))
+
+        # self.view.setPalette(palette)
         self.setLayout(QHBoxLayout())
         self.layout().addWidget(self.view)
         self.setSizePolicy(QSizePolicy(QSizePolicy.Fixed,QSizePolicy.Fixed))
 
         self.setAcceptDrops(True)
-
+        
     
     def dragEnterEvent(self, event ) -> None:
         global ALLOWED_SUFFIXES
@@ -307,10 +416,14 @@ class ImageViewer(QWidget):
 
     def keyPressEvent(self, event):
         if event.key() == Qt.Key_Delete:
+            global CURRENTLY_RUNNING
+            if CURRENTLY_RUNNING:
+                return
 
             idxs = self.view.selectionModel().selectedIndexes()
             new_idxs = [idx.row() * self.model.columnCount() + idx.column() for idx in idxs]
             self.model.deleteIdxs(new_idxs)
+            self.view.selectionModel().clearSelection()
             # row = self.currentRow()
             # self.removeRow(row)
         else:
@@ -322,7 +435,6 @@ class ImageViewer(QWidget):
         return QSize(1250, 850)
         
     def selectionChanged(self, event=None):
-
         idxs = self.view.selectionModel().selectedIndexes()
         self.parent().metadataWidget.show_data(idxs)
 
@@ -366,7 +478,7 @@ class histWidget(QFrame):
         self.layout().addWidget(self.plotTabWidget)
         self.plotItems = {}
     
-    def updatePlot(self, id):
+    def updatePlot(self, id, idx):
         id:image_data
         tab_count = self.plotTabWidget.count()
         for idx in range(tab_count-1, 0, -1):
@@ -387,19 +499,19 @@ class histWidget(QFrame):
         # hist_data = id.hist_data[id.best_gridsize]
             edges = hist_data["edges"]
             values = hist_data["values"]
-            threshold = hist_data["threshold"]
+            threshold = id.metadata["Threshold"]
 
             bargraph = pg.BarGraphItem(x0=edges[:-1], x1=edges[1:], height=np.log(values),)
             
             line = pg.InfiniteLine(threshold,pen="red", movable=True)
-            line.sigPositionChanged.connect(self.updateThreshold)
+            # line.sigPositionChanged.connect(self.updateThreshold)
             line.sigPositionChangeFinished.connect(self.updateMask)
             current_plot_widget.setXRange(np.min(edges), max(np.max(edges), threshold))
             current_plot_widget.addItem(bargraph)
             current_plot_widget.addItem(line)
             # ax.bar(edges[:-1], values, width=np.diff(edges))
 
-            self.plotItems[tab_name] = {"line":line, "bargraph":bargraph, "imagedata":id, "gridsize":key }
+            self.plotItems[tab_name] = {"line":line, "bargraph":bargraph, "imagedata":id, "gridsize":key, "idx":idx }
             self.plotTabWidget.addTab(current_plot_widget,tab_name)
 
     def clearAll(self):
@@ -411,21 +523,25 @@ class histWidget(QFrame):
         self.plotTabWidget.setTabText(0, "Hist")
         self.plotItems = {}
 
-    def updateThreshold(self, line=None):
+    # def updateThreshold(self, line=None):
 
-        line: pg.InfiniteLine
+    #     line: pg.InfiniteLine
 
-        self.parent().runWidget.thresholdLineEdit.setText(str(line.getPos()[0]))
+    #     self.parent().runWidget.thresholdLineEdit.setText(str(line.getPos()[0]))
+    #     self.parent().parent().imageviewer.
         
     
-    def updateMask(self, line=None):
+    def updateMask(self, line=None, newthreshold=None):
+        if line is not None:
+            newthreshold = line.getPos()[0]
+        
         for key, value in self.plotItems.items():
-            value["line"].setPos(line.getPos())
+            value["line"].setPos(newthreshold)
             
         pass
         if len(self.plotItems.keys()) != 0:
-            newthreshold = line.getPos()[0]
-
+            # newthreshold = line.getPos()[0]
+            
             name = self.plotTabWidget.tabText(self.plotTabWidget.currentIndex())
             id = self.plotItems[name]["imagedata"]
             hist_data = id.hist_data[self.plotItems[name]["gridsize"]]
@@ -441,12 +557,27 @@ class histWidget(QFrame):
                 
                 
             else:
-                gridsize = self.plotItems[name]["gridsize"]
-                new_mask = np.zeros(id.metadata["Dimensions"], np.uint8)
+                for idx in range(self.plotTabWidget.count()):
+                    widget = self.plotTabWidget.widget(idx)
+                    
+                    name = self.plotTabWidget.tabText(idx)
+                    id = self.plotItems[name]["imagedata"]
+                    hist_data = id.hist_data[self.plotItems[name]["gridsize"]]
+                    edges = hist_data["edges"]
+                    values = hist_data["values"]
+                    self.plotTabWidget.currentWidget().setXRange(np.min(edges), max(np.max(edges), newthreshold))
+                    if np.max(edges) >= newthreshold:
+                        gridsize = self.plotItems[name]["gridsize"]
+                        new_mask = reevaluateMask(hist_data["center"], gridsize, id.metadata["Pixel spacing"],id.metadata["Dimensions"])
+                        break
+                else:
+                    gridsize = self.plotItems[name]["gridsize"]
+                    new_mask = np.zeros(id.metadata["Dimensions"], np.uint8)
             
             id.mask = q2n.array2qimage(new_mask, True)
             id.original_mask = new_mask
             id.best_gridsize = gridsize
+            id.metadata["Threshold"] = newthreshold
             
             self.parent().thumbnailWidget.load_images(id)
             
@@ -458,11 +589,15 @@ class histWidget(QFrame):
                 hist_data = id.hist_data[id.best_gridsize]
                 edges = hist_data["edges"]
                 values = hist_data["values"]
-            #     widget.setXRange(np.min(edges), max(np.max(edges), newthreshold))
+                widget.setXRange(np.min(edges), max(np.max(edges), newthreshold))
+            idxs = self.parent().parent().imageviewer.view.selectionModel().selectedIndexes()
+            if len(idxs) == 1:
+                self.parent().parent().imageviewer.view.model().dataChanged.emit(idxs[0], idxs[0])
+                self.parent().metadataWidget.thresholdLineEdit.setText(str(newthreshold))
                 
     def sizeHint(self):
         # All items the same size.
-        return QSize(350, 250)
+        return QSize(500, 250)
         
             
     # def sizeHint(self):
@@ -497,6 +632,9 @@ class thumbnailWidget(QFrame):
         self.layout().addWidget(self.maskLabel,0,2)
         self.layout().setColumnStretch(1,1)
 
+        self.imageLabel.setToolTip("Original image")
+        self.maskLabel.setToolTip("Mask")
+
     def load_images(self, data:image_data):
         image = data.image
         scaled = image.scaled(
@@ -528,6 +666,52 @@ class thumbnailWidget(QFrame):
         self.maskLabel.setPixmap(self.maskPixmap)
 
 
+class CorrectDoubleValidator(QValidator):
+    def __init__(self, low, top):
+        super().__init__()
+        self.low = float(low)
+        self.top = float(top)
+    
+    def validate(self, a0: str, a1: int):
+        if a0 == "":
+            return QValidator.State.Intermediate, a0, a1
+        try:
+            a0 = float(a0)
+        except:
+            return QValidator.State.Invalid, str(self.low), len(str(self.low))
+
+        if a0 < self.low:
+            a0 = self.low
+        elif a0 > self.top:
+            a0 = self.top 
+        return QValidator.State.Acceptable, str(a0), len(str(a0))
+    
+    def fixup(self, a0: str) -> str:
+        return str(self.low)
+
+class CorrectIntValidator(QValidator):
+    def __init__(self, low, top):
+        super().__init__()
+        self.low = low
+        self.top = top
+    
+    def validate(self, a0: str, a1: int):
+        if a0 == "":
+            return QValidator.State.Intermediate, a0, a1
+        try:
+            a0 = int(a0)
+        except:
+            return QValidator.State.Invalid, str(self.low), len(str(self.low))
+
+        if a0 < self.low:
+            a0 = self.low
+        elif a0 > self.top:
+            a0 = self.top 
+        return QValidator.State.Acceptable, str(a0), len(str(a0))
+    
+    def fixup(self, a0: str) -> str:
+        return str(self.low)
+
 class runWidget(QFrame):
     def __init__(self, parent):
         global CURRENT_CONFIG
@@ -540,24 +724,34 @@ class runWidget(QFrame):
         self.setFrameShape(QFrame.Panel)
         self.setFrameShadow(QFrame.Raised)
         self.setLineWidth(1)
-        self.njobsLabel = QLabel("Njobs")
+        self.njobsLabel = QLabel("# CPUs to use")
         self.njobsLineEdit = QLineEdit(str(CURRENT_CONFIG["parameters"]["njobs"]))
-        self.thresholdLabel = QLabel("Threshold")
-        self.thresholdLineEdit = QLineEdit(str(CURRENT_CONFIG["parameters"]["threshold"]))
-
+        # self.thresholdLabel = QLabel("Threshold")
+        # self.thresholdLineEdit = QLineEdit(str(CURRENT_CONFIG["parameters"]["threshold"]))
+        # self.thresholdLineEdit.setValidator(QDoubleValidator())
         self.runAllButton = QPushButton(text="Mask all")
         self.runnSelectedButton = QPushButton(text="Mask selected")
 
-        self.njobsLineEdit.setValidator(QIntValidator(1, MAX_CORES))
-        self.thresholdLineEdit.setValidator(QDoubleValidator())
+        self.njobsLineEdit.setValidator(CorrectIntValidator(1, MAX_CORES,))
+        
+        self.toggleResizeCheckbox = QCheckBox(text="Resize")
+        self.toggleResizeCheckbox.setToolTip("Resize the image during edge detection for faster calculations")
+        self.resizeLineEdit = QLineEdit("7")
+        self.resizeLineEdit.setToolTip("Pixel spacing in px/Å for resizing")
+  
+        self.resizeLineEdit.setValidator(CorrectDoubleValidator(0.001, 100))
+
+        self.layout().addWidget(self.toggleResizeCheckbox, 0,0)
+        self.layout().addWidget(self.resizeLineEdit,0,1)
+
+        
         self.runAllButton.clicked.connect(self.runAll)
         self.runnSelectedButton.clicked.connect(self.runSelected)
         self.number_of_images = 1
         self.current_number_of_images = 0
-        self.layout().addWidget(self.njobsLabel, 0,0)
-        self.layout().addWidget(self.njobsLineEdit, 0,1)
-        self.layout().addWidget(self.thresholdLabel, 1,0)
-        self.layout().addWidget(self.thresholdLineEdit, 1,1)
+        self.layout().addWidget(self.njobsLabel, 1,0)
+        self.layout().addWidget(self.njobsLineEdit, 1,1)
+
         self.layout().addWidget(self.runAllButton,2,0)
         self.layout().addWidget(self.runnSelectedButton,2,1)
 
@@ -582,7 +776,7 @@ class runWidget(QFrame):
     def runIndexes(self, indexes, image_datas):
         
         self.thread = QThread()
-        self.worker = Worker(indexes, image_datas, float(self.thresholdLineEdit.text()), int(self.njobsLineEdit.text()))
+        self.worker = Worker(indexes, image_datas, int(self.njobsLineEdit.text()), self.toggleResizeCheckbox.isChecked(),float(self.resizeLineEdit.text()))
         
         # self.worker.njobs = int(self.njobsLineEdit.text())
         self.number_of_images = len(indexes)
@@ -599,6 +793,9 @@ class runWidget(QFrame):
 
 
     def testWorker(self, emit):
+        if len(emit) == 1:
+            print(emit)
+            return
         (row, col), mask, hist_data, gridsize = emit
         self.current_number_of_images += 1
         self.parent().parent().setProgress(self.current_number_of_images / self.number_of_images * 100)
@@ -609,7 +806,8 @@ class runWidget(QFrame):
         data.hist_data = hist_data
         data.best_gridsize = gridsize
         index = view.model().createIndex(row, col)
-        view.selectionModel().select(index,QItemSelectionModel.SelectionFlag.ClearAndSelect)
+        view.selectionModel().clearSelection()
+        view.selectionModel().select(index,QItemSelectionModel.SelectionFlag.Select)
         view.model().dataChanged.emit(index, index)
 
     def finishedRunning(self):
@@ -643,11 +841,13 @@ class runWidget(QFrame):
 
 class legendWidget(QWidget):
     def __init__(self, parent):
+        global COLORS
         super().__init__(parent)
-        self.setLayout(QVBoxLayout)
+        self.setLayout(QVBoxLayout())
 
-        self.legends = (("red", "Not masked yet"), ("yellow", "Below threshold, no mask"), ("green", "Edge was found"))
-        # self.colorLabels = {}
+        self.legends = ((COLORS["not yet"], "Not masked yet"), (COLORS["nothing found"], "No edge was found"), (COLORS["mask found"], "Edge was found"))
+        
+        self.colorLabels = {}
         # self.descLabels = {}
         for (color, title) in self.legends:
             new_pixmap = QPixmap(10,10)
@@ -657,10 +857,21 @@ class legendWidget(QWidget):
 
             newDescLabel = QLabel(self, text=title)
             newLayout = QHBoxLayout()
+            newPlacerholder = QWidget()
             newLayout.addWidget(newColorLabel)
             newLayout.addWidget(newDescLabel)
+            newLayout.addWidget(newPlacerholder,1)
             self.layout().addLayout(newLayout)
+            self.colorLabels[title] = newColorLabel
 
+    def loadColors(self):
+        global COLORS
+        self.legends = ((COLORS["not yet"], "Not masked yet"), (COLORS["nothing found"], "No edge was found"), (COLORS["mask found"], "Edge was found"))
+        for (color, title) in self.legends:
+            new_pixmap = QPixmap(10,10)
+            new_pixmap.fill(QColor(color))
+            
+            self.colorLabels[title].setPixmap(new_pixmap)
 
 
 class rightWidget(QWidget):
@@ -671,12 +882,17 @@ class rightWidget(QWidget):
         self.thumbnailWidget = thumbnailWidget(self)
         self.metadataWidget = metadataWidget(self)
         self.runWidget = runWidget(self)
+        self.logoLabel = QLabel(self)
+        logoPixelMap = QPixmap("/Data/erc-3/schoennen/carbon_edge_detector/GridEdgeDetector/grid_edge_detector/ced_logopng.png",).scaled(200,200, Qt.KeepAspectRatio)
+        self.logoLabel.setPixmap(logoPixelMap)
         self.setLayout(QVBoxLayout())
         self.layout().addWidget(self.legendWidget)
         self.layout().addWidget(self.histWidget)
         self.layout().addWidget(self.thumbnailWidget)
         self.layout().addWidget(self.metadataWidget)
         self.layout().addWidget(self.runWidget)
+        self.layout().addWidget(self.logoLabel)
+        # self.layout().addWidget(QWidget(),1)
         self.setSizePolicy(QSizePolicy(QSizePolicy.Fixed,QSizePolicy.Fixed))
 
     def show_data(self, idxs):
@@ -685,14 +901,14 @@ class rightWidget(QWidget):
             assert len(data) == 1
             data = data[0]
             self.thumbnailWidget.load_images(data)
-            self.histWidget.updatePlot(data)
+            self.histWidget.updatePlot(data, idxs[0])
         else:
             self.thumbnailWidget.clearBoth()
             self.histWidget.clearAll()
 
     def sizeHint(self):
         # All items the same size.
-        return QSize(350, 600)
+        return QSize(350, 800)
 
 
 class QFloatListValidator(QValidator):
@@ -738,22 +954,32 @@ class metadataWidget(QFrame):
         
 
         self.pixelspacingLabelDesc = QLabel("Pixel spacing [px/Å]:")
-        self.pixelspacingLabel = QLabel("")
+        self.pixelspacingLabel = QLineEdit("")
+        self.pixelspacingLabel.editingFinished.connect(self.setPixelspacing)
+        validator = QDoubleValidator()
+        validator.setBottom(0.001)
+        self.pixelspacingLabel.setValidator(validator)
 
         self.gridsizeLabelDesc = QLabel("Grid hole size [µm]:")
         self.gridsizeLineEdit = QLineEdit("")
 
+        self.thresholdLabelDesc = QLabel("Threshold")
+        self.thresholdLineEdit = QLineEdit("")
+        self.thresholdLineEdit.setValidator(QDoubleValidator())
+        self.thresholdLineEdit.editingFinished.connect(self.setThreshold)
+        self.thresholdLineEdit.setToolTip("Threshold for finding the edge. Defaul is 0.02. Values to threshold are shown in the histogram after trying to mask the images.")
+
         self.gridsizeLineEdit.setValidator(QFloatListValidator())
-        self.gridsizeLineEdit.setToolTip("Size of the grid hole sizes in µm. If unsure, you can input multiple values seperates by commas and it will try to find the best one.")
+        self.gridsizeLineEdit.setToolTip("Size of the grid hole sizes in µm. If unsure, you can input multiple values seperated by commas and it will try to find the best one.")
         self.gridsizeLineEdit.editingFinished.connect(self.setGridsize)
 
         # self.layout().setVerticalSpacing(0)
         # (self.fileNameLabelDesc, self.fileNameLabel)
-        for counter, (desc, label) in enumerate([(self.dimensionLabelDesc, self.dimensionLabel),(self.pixelspacingLabelDesc, self.pixelspacingLabel),(self.gridsizeLabelDesc, self.gridsizeLineEdit)]):
+        for counter, (desc, label) in enumerate([(self.dimensionLabelDesc, self.dimensionLabel),(self.pixelspacingLabelDesc, self.pixelspacingLabel),(self.gridsizeLabelDesc, self.gridsizeLineEdit), (self.thresholdLabelDesc, self.thresholdLineEdit)]):
 
             self.layout().addWidget(desc, counter, 0)
             self.layout().addWidget(label, counter, 1)
-            if counter == 2:
+            if isinstance(label, QLineEdit) and not label.isReadOnly():
                 color = "white"
             else:
                 color = "lightgray"
@@ -771,12 +997,15 @@ class metadataWidget(QFrame):
         dimensions = set([str(i.metadata["Dimensions"]) for i in ids])
         pixespacings = set([str(i.metadata["Pixel spacing"]) for i in ids])
         gridsizes = set()
+        
         for i in ids:
             gridsizes.update([str(gs) for gs in i.metadata["Gridsize"]])
         # gridsizes = set([str(i.metadata["Gridsize"]) for i in ids])
+        thresholds = set([str(i.metadata["Threshold"]) for i in ids])
         self.dimensionLabel.setText(", ".join(dimensions))
         self.pixelspacingLabel.setText(", ".join(pixespacings))
         self.gridsizeLineEdit.setText(", ".join(gridsizes))
+        self.thresholdLineEdit.setText(", ".join(thresholds))
         return ids
         # else:
         #     self.dimensionLabel.setText(str(data.metadata["Dimensions"]))
@@ -792,6 +1021,40 @@ class metadataWidget(QFrame):
         ids = [self.parent().parent().imageviewer.model.previews[idx] for idx in new_idxs]
         for id in ids:
             id.metadata["Gridsize"] = new_gridsizes
+
+    def setPixelspacing(self, event=None):
+        pixel_spacing = float(self.pixelspacingLabel.text())
+        idxs = self.parent().parent().imageviewer.view.selectionModel().selectedIndexes()
+        new_idxs = [idx.row() * self.parent().parent().imageviewer.model.columnCount() + idx.column() for idx in idxs]
+        ids = [self.parent().parent().imageviewer.model.previews[idx] for idx in new_idxs]
+        for id in ids:
+            id.metadata["Pixel spacing"] = pixel_spacing
+
+    def setThreshold(self, event=None):
+        threshold = float(self.thresholdLineEdit.text())
+        idxs = self.parent().parent().imageviewer.view.selectionModel().selectedIndexes()
+        new_idxs = [idx.row() * self.parent().parent().imageviewer.model.columnCount() + idx.column() for idx in idxs]
+        ids = [self.parent().parent().imageviewer.model.previews[idx] for idx in new_idxs]
+        for id in ids:
+            id.metadata["Threshold"] = threshold
+            if not id.hist_data is None:
+                id:image_data                 
+                hist_data = id.hist_data[id.best_gridsize]
+                edges = hist_data["edges"]
+                values = hist_data["values"]
+
+                if np.max(edges) >= threshold:
+                    
+                    new_mask = reevaluateMask(hist_data["center"], id.best_gridsize, id.metadata["Pixel spacing"],id.metadata["Dimensions"])
+                else:
+                    new_mask = np.zeros(id.metadata["Dimensions"], np.uint8)
+                id.original_mask = new_mask
+                id.mask = q2n.gray2qimage(new_mask, True)
+        if len(idxs) == 1:
+            self.parent().parent().imageviewer.view.selectionModel().clearSelection()
+            self.parent().parent().imageviewer.view.selectionModel().select(idxs[0],QItemSelectionModel.SelectionFlag.Select)
+        self.parent().parent().imageviewer.model.layoutChanged.emit()
+
 
 
 class mainWidget(QWidget):
@@ -813,7 +1076,7 @@ class mainWidget(QWidget):
         self.layout().addLayout(self.lowerLayout)
         self.lowerLayout.addWidget(self.imageviewer)
         self.lowerLayout.addWidget(self.metadataWidget)
-
+        self.setProgress(0)
 
     def pushed_button(self):
         self.imageviewer.load_files()
@@ -842,46 +1105,54 @@ class MainWindow(QMainWindow):
         self.loadFilesAction = self.filesMenu.addAction("Load files")
         self.saveFilesAction = self.filesMenu.addAction("Save all masks")
         self.saveSelectedFilesAction = self.filesMenu.addAction("Save selected masks")
+        self.saveMaskedImagesAction = self.filesMenu.addAction("Save all masked images")
+        self.saveSelectedMaskedImagesAction = self.filesMenu.addAction("Save selected masked images")
         menuBar.addMenu(self.filesMenu)
         
         self.loadFilesAction.triggered.connect(self.loadFiles)
         self.saveFilesAction.triggered.connect(self.saveAllMasks)
         self.saveSelectedFilesAction.triggered.connect(self.saveSelectedMasks)
-
+        self.saveMaskedImagesAction.triggered.connect(self.saveAllMaskedImages)
+        self.saveSelectedMaskedImagesAction.triggered.connect(self.saveSelectedMaskedImages)
         
         self.configMenu = QMenu("Config", menuBar)
         self.openConfigFileAction = self.configMenu.addAction("Open config file")
-        self.createDefaultConfigFileAction = self.configMenu.addAction("Create default config file")
+        # self.createDefaultConfigFileAction = self.configMenu.addAction("Create default config file")
+        self.toggleColorblindModeAction = self.configMenu.addAction("Toggle colorblind mode")
         self.openConfigFileAction.triggered.connect(self.openConfigFile)
-        self.createDefaultConfigFileAction.triggered.connect(self.createDefaultConfig)
+        # self.createDefaultConfigFileAction.triggered.connect(self.createDefaultConfig)
+        self.toggleColorblindModeAction.triggered.connect(self.toggleColorblindMode)
         menuBar.addMenu(self.configMenu)
 
     def openConfigFile(self):
         global CONFIG_FILE, CURRENT_CONFIG
-        if platform.system() == 'Darwin':       # macOS
-            subprocess.call(('open', CONFIG_FILE))
-        elif platform.system() == 'Windows':    # Windows
-            os.startfile(CONFIG_FILE)
-        else:                                   # linux variants
-            subprocess.call(('xdg-open', CONFIG_FILE))
+        # if platform.system() == 'Darwin':       # macOS
+        #     subprocess.call(('open', CONFIG_FILE))
+        # elif platform.system() == 'Windows':    # Windows
+        #     os.startfile(CONFIG_FILE)
+        # else:                                   # linux variants
+        #     subprocess.call(('xdg-open', CONFIG_FILE))
+        self.ConfigWindow = Window(self)
         
-        CURRENT_CONFIG = load_config_file()
-        self.loadConfig()
+        self.ConfigWindow.show()
+        print("HALLO?")
     
     def loadConfig(self):
         global CURRENT_CONFIG
+        CURRENT_CONFIG = load_config_file()
         previews = self.mainwidget.imageviewer.model.previews
         for i in previews:
             i:image_data 
-            i.metadata["Gridsize"] = CURRENT_CONFIG["parameters"]["gridsize"]
+            i.metadata["Gridsize"] = CURRENT_CONFIG["parameters"]["gridsizes"]
         self.mainwidget.metadataWidget.runWidget.njobsLineEdit.setText(str(CURRENT_CONFIG["parameters"]["njobs"]))
-        self.mainwidget.metadataWidget.runWidget.thresholdLineEdit.setText(str(CURRENT_CONFIG["parameters"]["threshold"]))
+        self.loadColorBlindMode()
+        # self.mainwidget.metadataWidget.runWidget.thresholdLineEdit.setText(str(CURRENT_CONFIG["parameters"]["threshold"]))
 
-    def createDefaultConfig(self):
-        global CURRENT_CONFIG
-        create_default_config_file(True)
-        CURRENT_CONFIG = load_config_file()
-        self.loadConfig()
+    # def createDefaultConfig(self):
+    #     global CURRENT_CONFIG
+    #     create_default_config_file(True)
+    #     CURRENT_CONFIG = load_config_file()
+    #     self.loadConfig()
 
 
     def setDisabledActions(self, disable=True):
@@ -897,7 +1168,10 @@ class MainWindow(QMainWindow):
         global DISABLE_FUNCTION
         dialog = QFileDialog()
         dialog.setFileMode(QFileDialog.ExistingFiles)
-        names, filt = dialog.getOpenFileNames(self, "Open images", CURRENT_CONFIG["files"]["filedir"], "mrc files (*.mrc *.MRC *.rec, *.REC)")
+        file_suffixes = sorted([f"*{i}" for i in ALLOWED_SUFFIXES])
+        file_suffixes = " *".join(file_suffixes)
+        file_suffixes = f"mrc files (*{file_suffixes})"
+        names, filt = dialog.getOpenFileNames(self, "Open images", CURRENT_CONFIG["files"]["filedir"],file_suffixes)
         # dialog.getOpenFileNames(self, "Open images", "/home", )
         # filedialog = QFileDialog.getOpenFileName(self, "Open Image", "/home", "")
         names = [Path(name) for name in names]
@@ -910,7 +1184,43 @@ class MainWindow(QMainWindow):
         self.saveMasks(image_datas)
     
     def saveSelectedMasks(self):
-        pass
+        
+        idxs = self.mainwidget.imageviewer.view.selectionModel().selectedIndexes()
+        new_idxs = [idx.row() * self.mainwidget.imageviewer.model.columnCount() + idx.column() for idx in idxs]
+        image_datas = [self.mainwidget.imageviewer.model.previews[idx] for idx in new_idxs]
+        print(new_idxs)
+        self.saveMasks(image_datas)
+
+    def saveSelectedMaskedImages(self):
+        idxs = self.mainwidget.imageviewer.view.selectionModel().selectedIndexes()
+        new_idxs = [idx.row() * self.mainwidget.imageviewer.model.columnCount() + idx.column() for idx in idxs]
+        image_datas = [self.mainwidget.imageviewer.model.previews[idx] for idx in new_idxs]
+        print(new_idxs)
+        self.saveMaskedImages(image_datas)
+
+    def saveAllMaskedImages(self):
+        image_datas = self.mainwidget.imageviewer.model.previews
+        self.saveMaskedImages(image_datas)
+
+    def saveMaskedImages(self, image_datas):
+        global CURRENT_CONFIG  
+        dialog = QFileDialog()
+        # dialog.setFileMode(QFileDialog.Ex)
+        save_dir = dialog.getExistingDirectory(self, "Save directory", CURRENT_CONFIG["files"]["filedir"])
+        if save_dir is not None and len(save_dir) > 0:
+            save_dir = Path(save_dir).absolute()
+            for id in image_datas:
+                if id.original_mask is not None:
+                    current_path = save_dir / (id.fn.stem + CURRENT_CONFIG["files"]["masked_image_file_suffix"] + id.fn.suffix)
+                    data = id.original_image
+                    data[id.original_mask == 0] = np.min(data)
+                    if current_path.suffix in [".mrc", ".MRC", ".rec", ".REC"]:
+                        with mrcfile.new(current_path, data=data, overwrite=True) as f:
+                            f.voxel_size = id.metadata["Pixel spacing"]
+                    else:
+                        plt.imsave(data, id.original_mask, cmap="gray") 
+
+
 
     def saveMasks(self, image_datas):
         global CURRENT_CONFIG
@@ -922,11 +1232,176 @@ class MainWindow(QMainWindow):
             save_dir = Path(save_dir).absolute()
             for id in image_datas:
                 if id.original_mask is not None:
-                    current_path = save_dir / (id.fn.stem + CURRENT_CONFIG["files"]["addition to file"] + id.fn.suffix)
-                    with mrcfile.new(current_path, data=id.original_mask, overwrite=True) as f:
-                        f.voxel_size = id.metadata["Pixel spacing"]
+                    current_path = save_dir / (id.fn.stem + CURRENT_CONFIG["files"]["mask_file_suffix"] + id.fn.suffix)
+                    if current_path.suffix in [".mrc", ".MRC", ".rec", ".REC"]:
+                        with mrcfile.new(current_path, data=id.original_mask, overwrite=True) as f:
+                            f.voxel_size = id.metadata["Pixel spacing"]
+                    else:
+                        plt.imsave(current_path, id.original_mask, cmap="gray")    
         
+    def toggleColorblindMode(self):
+        global CURRENT_CONFIG, COLORS, COLORS_ALTERNATIVE, COLORS_DEFAULT
+        CURRENT_CONFIG["misc"]["colorblind_mode"] = not CURRENT_CONFIG["misc"]["colorblind_mode"]
+        self.loadColorBlindMode()
 
+    def loadColorBlindMode(self):
+        global CURRENT_CONFIG, COLORS, COLORS_ALTERNATIVE, COLORS_DEFAULT
+        if CURRENT_CONFIG["misc"]["colorblind_mode"]:
+            COLORS = COLORS_ALTERNATIVE
+        else:
+            COLORS = COLORS_DEFAULT
+        self.mainwidget.metadataWidget.legendWidget.loadColors() 
+        self.mainwidget.imageviewer.model.layoutChanged.emit()
+
+
+
+class Window(QWidget):
+    def __init__(self, parent):
+        super().__init__()
+        self.parentWindow = parent
+        self.file_path = None
+
+        self.save_current_file_shortcut = QShortcut(QKeySequence('Ctrl+S'), self)
+        self.save_current_file_shortcut.activated.connect(self.save_current_file)
+
+        vbox = QVBoxLayout()
+        
+        self.title = QLabel("")
+        self.title.setWordWrap(True)
+        self.title.setAlignment(Qt.AlignmentFlag.AlignCenter)
+
+        self.loadDefaultButton = QPushButton("Load default values")
+        self.loadConfigFileButton = QPushButton("Load config file")
+        self.saveFileButton = QPushButton("Save")
+
+        self.loadDefaultButton.clicked.connect(self.loadDefaultConfig)
+        self.loadConfigFileButton.clicked.connect(self.open_new_file)
+        self.saveFileButton.clicked.connect(self.save_current_file)
+       
+        self.titleLayout = QHBoxLayout()
+        self.titleLayout.addWidget(self.loadDefaultButton)
+        self.titleLayout.addWidget(self.loadConfigFileButton)
+        self.titleLayout.addWidget(self.saveFileButton)
+        
+        
+        vbox.addWidget(self.title)
+        self.setLayout(vbox)
+        self.layout().addLayout(self.titleLayout)
+
+        self.scrollable_text_area = QTextEdit()
+        vbox.addWidget(self.scrollable_text_area)
+
+        self.changed_ = False
+
+        self.scrollable_text_area.textChanged.connect(self.somethingChanged)
+
+        self.open_new_file()
+        print("GETTING HERE")
+
+
+    @property
+    def changed(self):
+        return self.changed_
+
+    @changed.setter
+    def changed(self, value):
+        if self.changed and value:
+            return
+        if self.changed and not value:
+            self.changed_ = value
+            self.title.setText(self.title.text()[:-1])
+            return
+        if not self.changed and value:
+            self.changed_ = value
+            self.title.setText(self.title.text() + "*")
+        if not self.changed and not value:
+            return
+
+    def somethingChanged(self, event=None):
+        self.changed = True        
+
+    def loadDefaultConfig(self):
+        global DEFAULT_CONFIG
+        config = toml.dumps(DEFAULT_CONFIG)
+        self.scrollable_text_area.setText(config)
+
+    def open_new_file(self):
+        global CONFIG_FILE 
+        
+        if CONFIG_FILE:
+            try:
+                config = toml.load(CONFIG_FILE)
+                config_str = toml.dumps(config)
+            
+                self.title.setText(str(CONFIG_FILE))
+                self.scrollable_text_area.setText(config_str)
+            except:
+                create_default_config_file(True)
+                config = toml.load(CONFIG_FILE)
+                config_str = toml.dumps(config)
+            
+                self.title.setText(str(CONFIG_FILE))
+                self.scrollable_text_area.setText(config_str)
+
+        else:
+            self.invalid_path_alert_message()
+
+    def save_current_file(self):
+        global CONFIG_FILE
+        if not CONFIG_FILE:
+            
+            self.invalid_path_alert_message()
+            return False
+        file_contents = self.scrollable_text_area.toPlainText()
+        try:
+            config = toml.loads(file_contents)
+            if check_config(config):
+                with open(CONFIG_FILE, "w") as f:
+                    toml.dump(config,f)
+                self.changed = False
+                self.parentWindow.loadConfig()
+            else:
+                self.invalid_toml_file_message()
+                # self.loadDefaultConfig()
+                # self.open_new_file()
+        except:
+            self.invalid_toml_file_message()
+            # create_default_config_file()
+            # self.open_new_file()
+
+    def closeEvent(self, event):
+        if self.changed:
+            messageBox = QMessageBox()
+            title = "Quit Application?"
+            message = "WARNING !!\n\nIf you quit without saving, any changes made to the file will be lost.\n\nSave file before quitting?"
+        
+            reply = messageBox.question(self, title, message, messageBox.Yes | messageBox.No |
+                    messageBox.Cancel, messageBox.Cancel)
+            if reply == messageBox.Yes:
+                return_value = self.save_current_file()
+                if return_value == False:
+                    event.ignore()
+            elif reply == messageBox.No:
+                
+                event.accept()
+            else:
+                event.ignore()
+        else:
+            
+            event.accept()
+
+    def invalid_path_alert_message(self):
+        messageBox = QMessageBox()
+        messageBox.setWindowTitle("Invalid file")
+        messageBox.setText("Selected filename or path is not valid. Please select a valid file.")
+        messageBox.exec()
+
+
+    def invalid_toml_file_message(self):
+        messageBox = QMessageBox()
+        messageBox.setWindowTitle("Invalid toml format")
+        messageBox.setText("The written toml file is invalid.")
+        messageBox.exec()
 
 
 
@@ -945,8 +1420,12 @@ def getDisableEverythingFunction(window):
 
 def main():
     global CURRENT_CONFIG, DISABLE_FUNCTION
+    global COLORS_ALTERNATIVE, COLORS, COLORS_DEFAULT
     CURRENT_CONFIG = load_config_file()
-    
+    if CURRENT_CONFIG["misc"]["colorblind_mode"]:
+        COLORS = COLORS_ALTERNATIVE
+    else:
+        COLORS = COLORS_DEFAULT
     app = QApplication(sys.argv)
     window = MainWindow()
     DISABLE_FUNCTION = getDisableEverythingFunction(window)
