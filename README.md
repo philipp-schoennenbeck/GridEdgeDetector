@@ -17,7 +17,7 @@ Activate conda environment
 
 Run setup.py file
 
-```python setup.py install```
+```pip install -e .```
 
 Now you can start the GUI with 
 ```ged```
