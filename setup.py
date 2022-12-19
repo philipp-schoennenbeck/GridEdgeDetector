@@ -11,7 +11,7 @@ DESCRIPTION = 'A GUI for carbon and other grid edge detection for electron micro
 URL = 'https://github.com/Croxa/GridEdgeDetector'
 EMAIL = 'p.schoennenbeck@fz-juelich.de'
 AUTHOR = 'Philipp Schönnenbeck'
-REQUIRES_PYTHON = '==3.7.12'
+REQUIRES_PYTHON = '>=3.10'
 VERSION = '0.1.0'
 
 # What packages are required for this module to be executed?

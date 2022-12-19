@@ -272,7 +272,7 @@ class PreviewDelegate(QStyledItemDelegate):
         data = index.model().data(index, Qt.DisplayRole)
         if data is None:
             return
-        painter.save()
+        # painter.save()
         # width = option.rect.width() - CELL_PADDING * 2
         width = (option.rect.width() - CELL_PADDING * 2) // 2
         height = option.rect.height() - CELL_PADDING * 2
@@ -285,8 +285,8 @@ class PreviewDelegate(QStyledItemDelegate):
             aspectRatioMode=Qt.KeepAspectRatio,
         )
         # Position in the middle of the area.
-        x = CELL_PADDING + (width - scaled.width()) / 2
-        y = CELL_PADDING + (height - scaled.height()) / 2
+        x = int(CELL_PADDING + (width - scaled.width()) / 2)
+        y = int(CELL_PADDING + (height - scaled.height()) / 2)
 
 
         if data.mask is None:
@@ -309,7 +309,7 @@ class PreviewDelegate(QStyledItemDelegate):
             # scaled_mask.fill(QColor("white"))
             painter.drawImage(option.rect.x() + x + scaled.width(), option.rect.y() + y, scaled_mask)
         
-        painter.restore()
+        # painter.restore()
     def sizeHint(self, option, index):
         # All items the same size.
         return QSize(160, 80)
@@ -794,7 +794,6 @@ class runWidget(QFrame):
 
     def testWorker(self, emit):
         if len(emit) == 1:
-            print(emit)
             return
         (row, col), mask, hist_data, gridsize = emit
         self.current_number_of_images += 1
@@ -1135,7 +1134,6 @@ class MainWindow(QMainWindow):
         self.ConfigWindow = Window(self)
         
         self.ConfigWindow.show()
-        print("HALLO?")
     
     def loadConfig(self):
         global CURRENT_CONFIG
@@ -1188,14 +1186,12 @@ class MainWindow(QMainWindow):
         idxs = self.mainwidget.imageviewer.view.selectionModel().selectedIndexes()
         new_idxs = [idx.row() * self.mainwidget.imageviewer.model.columnCount() + idx.column() for idx in idxs]
         image_datas = [self.mainwidget.imageviewer.model.previews[idx] for idx in new_idxs]
-        print(new_idxs)
         self.saveMasks(image_datas)
 
     def saveSelectedMaskedImages(self):
         idxs = self.mainwidget.imageviewer.view.selectionModel().selectedIndexes()
         new_idxs = [idx.row() * self.mainwidget.imageviewer.model.columnCount() + idx.column() for idx in idxs]
         image_datas = [self.mainwidget.imageviewer.model.previews[idx] for idx in new_idxs]
-        print(new_idxs)
         self.saveMaskedImages(image_datas)
 
     def saveAllMaskedImages(self):
@@ -1296,7 +1292,6 @@ class Window(QWidget):
         self.scrollable_text_area.textChanged.connect(self.somethingChanged)
 
         self.open_new_file()
-        print("GETTING HERE")
 
 
     @property
