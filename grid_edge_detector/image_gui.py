@@ -25,6 +25,7 @@ import psutil
 from time import sleep
 import random
 # import carbon_edge_detector as ced
+
 import grid_edge_detector.carbon_edge_detector as ced
 # import ced
 from skimage.draw import disk
@@ -51,7 +52,7 @@ if not CONFIG_DIR.exists():
 CONFIG_FILE = CONFIG_DIR / "config.toml"
 DEFAULT_CONFIG = {
     "title":"Grid edge detector configs", 
-    "parameters" :{"threshold":0.02, "gridsizes":[2.0], "njobs":1}, 
+    "parameters" :{"threshold":0.02, "gridsizes":[2.0], "njobs":1, "resize_value":7.0, "resize_bool":True}, 
     "files":{"filedir":str(Path().home()), "mask_file_suffix":"_mask","masked_image_file_suffix":"_masked"},
     "misc":{"colorblind_mode":False}}
 
@@ -150,9 +151,8 @@ class Worker(QObject):
             
 
         with mp.get_context("spawn").Pool(self.njobs) as pool:
-
             result = [pool.apply_async(run_parallel, [idx, data.fn, data.metadata,self.to_resize, self.resize_value ], callback=callback) for idx, data in zip(self.indexes, self.image_datas)]
-            [res.wait() for res in result]
+            [res.get() for res in result]
 
         pool.join()
         
@@ -180,12 +180,22 @@ class image_data:
                 self.metadata = {}
                 self.metadata["Dimensions"] = data.shape
                 self.metadata["Pixel spacing"] = float(f.voxel_size["x"])
-                
+                middle = np.median(data)
+                std = np.std(data)
+                left = middle - std * 4
+                right = middle + std * 4
+                data = np.clip(data, left, right)
+
         else:
             data = np.array(Image.open(self.fn).convert("L"))
             self.metadata = {}
             self.metadata["Dimensions"] = data.shape
             self.metadata["Pixel spacing"] = 1
+            middle = np.median(data)
+            std = np.std(data)
+            left = middle - std * 4
+            right = middle + std * 4
+            data = np.clip(data, left, right)
         self.metadata["Gridsize"] = CURRENT_CONFIG["parameters"]["gridsizes"]
         self.metadata["Threshold"] = CURRENT_CONFIG["parameters"]["threshold"]
 
@@ -283,6 +293,7 @@ class PreviewDelegate(QStyledItemDelegate):
             width,
             height,
             aspectRatioMode=Qt.KeepAspectRatio,
+            transformMode=Qt.TransformationMode.SmoothTransformation
         )
         # Position in the middle of the area.
         x = int(CELL_PADDING + (width - scaled.width()) / 2)
@@ -641,6 +652,7 @@ class thumbnailWidget(QFrame):
             self.shape,
             self.shape,
             aspectRatioMode=Qt.KeepAspectRatio,
+            transformMode=Qt.TransformationMode.SmoothTransformation
         )
         self.imagePixmap = QPixmap.fromImage(scaled)
         self.imageLabel.setPixmap(self.imagePixmap)
@@ -735,8 +747,9 @@ class runWidget(QFrame):
         self.njobsLineEdit.setValidator(CorrectIntValidator(1, MAX_CORES,))
         
         self.toggleResizeCheckbox = QCheckBox(text="Resize")
+        self.toggleResizeCheckbox.setChecked(CURRENT_CONFIG["parameters"]["resize_bool"])
         self.toggleResizeCheckbox.setToolTip("Resize the image during edge detection for faster calculations")
-        self.resizeLineEdit = QLineEdit("7")
+        self.resizeLineEdit = QLineEdit(str(CURRENT_CONFIG["parameters"]["resize_value"]))
         self.resizeLineEdit.setToolTip("Pixel spacing in px/Å for resizing")
   
         self.resizeLineEdit.setValidator(CorrectDoubleValidator(0.001, 100))
@@ -1131,7 +1144,7 @@ class MainWindow(QMainWindow):
         #     os.startfile(CONFIG_FILE)
         # else:                                   # linux variants
         #     subprocess.call(('xdg-open', CONFIG_FILE))
-        self.ConfigWindow = Window(self)
+        self.ConfigWindow = ConfigWindow(self)
         
         self.ConfigWindow.show()
     
@@ -1143,6 +1156,8 @@ class MainWindow(QMainWindow):
             i:image_data 
             i.metadata["Gridsize"] = CURRENT_CONFIG["parameters"]["gridsizes"]
         self.mainwidget.metadataWidget.runWidget.njobsLineEdit.setText(str(CURRENT_CONFIG["parameters"]["njobs"]))
+        self.mainwidget.metadataWidget.runWidget.resizeLineEdit.setText(str(CURRENT_CONFIG["parameters"]["resize_value"]))
+        self.mainwidget.metadataWidget.runWidget.toggleResizeCheckbox.setChecked(CURRENT_CONFIG["parameters"]["resize_bool"])
         self.loadColorBlindMode()
         # self.mainwidget.metadataWidget.runWidget.thresholdLineEdit.setText(str(CURRENT_CONFIG["parameters"]["threshold"]))
 
@@ -1251,7 +1266,7 @@ class MainWindow(QMainWindow):
 
 
 
-class Window(QWidget):
+class ConfigWindow(QWidget):
     def __init__(self, parent):
         super().__init__()
         self.parentWindow = parent
@@ -1269,15 +1284,18 @@ class Window(QWidget):
         self.loadDefaultButton = QPushButton("Load default values")
         self.loadConfigFileButton = QPushButton("Load config file")
         self.saveFileButton = QPushButton("Save")
+        self.applyButton = QPushButton("Save and apply")
 
         self.loadDefaultButton.clicked.connect(self.loadDefaultConfig)
         self.loadConfigFileButton.clicked.connect(self.open_new_file)
         self.saveFileButton.clicked.connect(self.save_current_file)
+        self.applyButton.clicked.connect(self.apply)
        
         self.titleLayout = QHBoxLayout()
         self.titleLayout.addWidget(self.loadDefaultButton)
         self.titleLayout.addWidget(self.loadConfigFileButton)
         self.titleLayout.addWidget(self.saveFileButton)
+        self.titleLayout.addWidget(self.applyButton)
         
         
         vbox.addWidget(self.title)
@@ -1337,7 +1355,7 @@ class Window(QWidget):
             
                 self.title.setText(str(CONFIG_FILE))
                 self.scrollable_text_area.setText(config_str)
-
+            self.changed = False
         else:
             self.invalid_path_alert_message()
 
@@ -1354,16 +1372,17 @@ class Window(QWidget):
                 with open(CONFIG_FILE, "w") as f:
                     toml.dump(config,f)
                 self.changed = False
-                self.parentWindow.loadConfig()
+                
             else:
                 self.invalid_toml_file_message()
-                # self.loadDefaultConfig()
-                # self.open_new_file()
+                return False
+               
         except:
             self.invalid_toml_file_message()
-            # create_default_config_file()
-            # self.open_new_file()
-
+            return False
+        return True
+            
+    
     def closeEvent(self, event):
         if self.changed:
             messageBox = QMessageBox()
@@ -1384,6 +1403,11 @@ class Window(QWidget):
         else:
             
             event.accept()
+    
+    def apply(self):
+        if self.save_current_file():
+        
+            self.parentWindow.loadConfig()
 
     def invalid_path_alert_message(self):
         messageBox = QMessageBox()
@@ -1407,9 +1431,12 @@ def getDisableEverythingFunction(window):
 
         window.loadFilesAction.setDisabled(disable)
         window.saveFilesAction.setDisabled(disable)
+        window.saveSelectedMaskedImagesAction.setDisabled(disable)
+        window.saveMaskedImagesAction.setDisabled(disable)
         window.saveSelectedFilesAction.setDisabled(disable)
         window.mainwidget.metadataWidget.runWidget.runAllButton.setDisabled(disable)
         window.mainwidget.metadataWidget.runWidget.runnSelectedButton.setDisabled(disable)
+
 
     return disableEverything
 
