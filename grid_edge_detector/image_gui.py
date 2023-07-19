@@ -2,7 +2,12 @@ import glob
 import math
 import sys
 from collections import namedtuple
-
+import typing
+from PyQt5 import QtCore
+try:
+    from matk.gui import starting_menu
+except:
+    pass
 from scipy import sparse
 from matplotlib import pyplot as plt
 import subprocess, os, platform
@@ -14,7 +19,7 @@ from PyQt5.QtCore import QAbstractTableModel, Qt, QSize, QThread, QObject, pyqtS
 
 from PyQt5.QtGui import QImage, QPixmap, QColor, QIntValidator, QDoubleValidator, QPen, QValidator, QPalette, QKeySequence
 from PyQt5.QtWidgets import QApplication, QMainWindow, QTableView, QStyledItemDelegate, QWidget, QHBoxLayout, QVBoxLayout, QProgressBar, QPushButton, QGridLayout, QLabel, QLineEdit, QSizePolicy
-from PyQt5.QtWidgets import QMenuBar, QMenu, QFileDialog, QFrame, QTabWidget, QPlainTextEdit, QComboBox, QCheckBox, QShortcut, QTextEdit, QMessageBox
+from PyQt5.QtWidgets import QMenuBar, QMenu, QFileDialog, QFrame, QTabWidget, QPlainTextEdit, QComboBox, QCheckBox, QShortcut, QTextEdit, QMessageBox, QDialog, QDialogButtonBox, QSpinBox
 from pathlib import Path
 from PIL import Image
 import multiprocessing as mp
@@ -32,13 +37,14 @@ from skimage.draw import disk
 import toml
 # from carbon_edge_detector
 # import .carbon_edge_detector as ced
-
-
+from datetime import datetime
+from collections import defaultdict
 
 # Create a custom namedtuple class to hold our data.
 
-
+TIMER = defaultdict(lambda:0)
 Index = namedtuple("Index", ["row", "column"])
+CURRENTCOUNTER = 0
 NUMBER_OF_COLUMNS = 7
 CELL_PADDING = 5 # all sides
 MAX_CORES = psutil.cpu_count()
@@ -52,7 +58,8 @@ if not CONFIG_DIR.exists():
 CONFIG_FILE = CONFIG_DIR / "config.toml"
 DEFAULT_CONFIG = {
     "title":"Grid edge detector configs", 
-    "parameters" :{"threshold":0.02, "gridsizes":[2.0], "njobs":1, "resize_value":7.0, "resize_bool":True}, 
+    "parameters":{"threshold":0.005, "gridsizes":[2.0], "njobs":1, "to_size":200, "outside_circle_coverage":0.05, "inner_circle_coverage":0.5, "detect_ring":True, "ring_width":0.1, "wobble":0, "high_pass_filter":1500},
+    # "parameters" :{"threshold":0.02, "gridsizes":[2.0], "njobs":1, "resize_value":7.0, "resize_bool":True}, 
     "files":{"filedir":str(Path().home()), "mask_file_suffix":"_mask","masked_image_file_suffix":"_masked"},
     "misc":{"colorblind_mode":False}}
 
@@ -62,6 +69,54 @@ COLORS = {}
 COLORS_ALTERNATIVE = {"not yet":"red", "nothing found":"orange", "mask found":"light blue"}
 
 
+
+
+
+class NonMrcFilesPixelSizeWidget(QDialog):
+    def __init__(self, parent=None, count=None) -> None:
+        super().__init__(parent)
+        self.setLayout(QVBoxLayout())
+        if count is None:
+            text = "There are files without given pixel size.\nPlease confirm the pixel size for these files."
+        else:
+            text = f"There are {count} files without given pixel size.\nPlease confirm the pixel size for these files."
+        label = QLabel(text)
+        pixelsizelabel = QLabel("Pixelsize [Å]")
+        self.pixelsizelineedit = QLineEdit("1.0")
+        self.pixelsizelineedit.setValidator(CorrectDoubleValidator(0.01, None, 1.0))
+        lowerLayout = QHBoxLayout()
+        lowerLayout.addWidget(pixelsizelabel)
+        lowerLayout.addWidget(self.pixelsizelineedit)
+        self.layout().addWidget(label)
+        self.layout().addLayout(lowerLayout)
+
+        self.buttonLayout = QHBoxLayout()
+        self.confirmButton = QPushButton("Confirm")
+        self.confirmButton.clicked.connect(self.confirm)
+        
+        self.cancelButton = QPushButton("Cancel")
+        self.cancelButton.clicked.connect(self.cancel)
+        self.buttonLayout.addWidget(self.confirmButton)
+        self.buttonLayout.addWidget(self.cancelButton)
+        
+        self.layout().addLayout(self.buttonLayout)
+        
+    
+    def cancel(self):
+        self.reject()
+
+    def confirm(self):
+        self.accept()
+
+    def getPixelSize(self):
+        return float(self.pixelsizelineedit.text())
+
+
+def applyMask(analyserPath, mask, index):
+    from matk.matk_analysis.analyser import AnalyserWrapper, Analyser
+    analyser = Analyser.load(analyserPath, index=index)
+    analyser.applyMask(mask)
+    analyser.save()
 
 def create_default_config_file(overwrite=False):
     if not overwrite:
@@ -120,29 +175,39 @@ def reevaluateMask(center, gridsize, ps, shape):
     mask[yy,xx] = 1
     return mask
 
+def reevaluateMaskMP(center, gridsize, ps, shape, threshold, max_):
+    if max_ > threshold:
+        return reevaluateMask(center, gridsize, ps, shape), True
+    else:
+        return np.zeros(shape, np.uint8), False
 
 
-
-
-def run_parallel(idx, fn, metadata, to_resize, resize_value):
+def run_parallel(idx, fn, metadata, parameters):
     try:
-        mask, hist_data, gridsize = ced.mask_carbon_edge_per_file(fn, [i * 10000 for i in metadata["Gridsize"]], metadata["Threshold"], metadata["Pixel spacing"], get_hist_data=True,to_resize=to_resize, resize=resize_value)
-        return idx, mask, hist_data, gridsize
+        mask, hist_data, gridsize = ced.find_grid_hole_per_file(fn, parameters["to_size"], [i * 10000 for i in metadata["Gridsize"]], metadata["Threshold"],return_hist_data=True,
+                                                                coverage_percentage=parameters["inner_circle_coverage"],outside_coverage_percentage=parameters["outside_circle_coverage"],
+                                                                  ring_width=parameters["ring_width"]*10000,detect_ring=parameters["detect_ring"], pixel_size=metadata["Pixel spacing"], wobble=parameters["wobble"],
+                                                                  high_pass=parameters["high_pass_filter"])
+        # mask, hist_data, gridsize = ced.mask_carbon_edge_per_file(fn, [i * 10000 for i in metadata["Gridsize"]], metadata["Threshold"], metadata["Pixel spacing"], get_hist_data=True,to_resize=to_resize, resize=resize_value)
+        resized_mask = Image.fromarray(mask)
+        resized_mask.thumbnail((200,200))
+        found_edge = np.max(mask) > 0
+        return idx, mask, hist_data, gridsize, np.array(resized_mask), found_edge
     except Exception as e:
         e = traceback.format_exc()
+        print(e)
         return tuple([e])
 
 class Worker(QObject):
 
     finished = pyqtSignal()
     progress = pyqtSignal(tuple)
-    def __init__(self, indexes, image_datas, njobs=1, to_resize=False, resize_value=7):
+    def __init__(self, indexes, image_datas,parameters):
         super().__init__()
-        self.njobs = njobs
+        
         self.indexes = indexes
         self.image_datas = image_datas
-        self.to_resize = to_resize
-        self.resize_value = resize_value
+        self.parameters = parameters
         # self.threshold = threshold
 
     def run(self):
@@ -150,8 +215,8 @@ class Worker(QObject):
             self.progress.emit(result)
             
 
-        with mp.get_context("spawn").Pool(self.njobs) as pool:
-            result = [pool.apply_async(run_parallel, [idx, data.fn, data.metadata,self.to_resize, self.resize_value ], callback=callback) for idx, data in zip(self.indexes, self.image_datas)]
+        with mp.get_context("spawn").Pool(self.parameters["njobs"]) as pool:
+            result = [pool.apply_async(run_parallel, [idx, data.fn, data.metadata, self.parameters ], callback=callback) for idx, data in zip(self.indexes, self.image_datas)]
             [res.get() for res in result]
 
         pool.join()
@@ -169,39 +234,61 @@ class Worker(QObject):
 
 
 
+def loadImageData(fn, dataset, config):
+    return image_data(fn, dataset, True, config)
+
+
 
 class image_data:
-    def __init__(self, fn) -> None:
+    def __init__(self, fn, dataset, for_mp=False, config=None) -> None:
         global CURRENT_CONFIG
+        self.metadata = {}
         self.fn = Path(fn)
+        if dataset is None:
+            self.dataset = None
+        else:
+            self.dataset = dataset.name
         if self.fn.suffix in [".mrc", ".MRC", ".rec", ".REC"]:
             with mrcfile.open(self.fn,permissive=True) as f:
                 data = f.data * 1
-                self.metadata = {}
                 self.metadata["Dimensions"] = data.shape
-                self.metadata["Pixel spacing"] = float(f.voxel_size["x"])
                 middle = np.median(data)
                 std = np.std(data)
-                left = middle - std * 4
-                right = middle + std * 4
+                left = middle - std * 2
+                right = middle + std * 2
                 data = np.clip(data, left, right)
+                data = Image.fromarray(data)
+                data.thumbnail((200,200))
+                data = np.array(data)
+                
+                self.metadata["Pixel spacing"] = float(f.voxel_size["x"])
+                
+                
 
         else:
-            data = np.array(Image.open(self.fn).convert("L"))
-            self.metadata = {}
-            self.metadata["Dimensions"] = data.shape
+            img = Image.open(self.fn).convert("L")
+            self.metadata["Dimensions"] = img.size[::-1]
+            img.thumbnail((200,200))
+            data = np.array(img)
+            
             self.metadata["Pixel spacing"] = 1
             middle = np.median(data)
             std = np.std(data)
-            left = middle - std * 4
-            right = middle + std * 4
+            left = middle - std * 2
+            right = middle + std * 2
             data = np.clip(data, left, right)
-        self.metadata["Gridsize"] = CURRENT_CONFIG["parameters"]["gridsizes"]
-        self.metadata["Threshold"] = CURRENT_CONFIG["parameters"]["threshold"]
+        if config is None:
+            self.metadata["Gridsize"] = CURRENT_CONFIG["parameters"]["gridsizes"]
+            self.metadata["Threshold"] = CURRENT_CONFIG["parameters"]["threshold"]
+        else:
+            self.metadata["Gridsize"] = config["parameters"]["gridsizes"]
+            self.metadata["Threshold"] = config["parameters"]["threshold"]
 
-        
+        if for_mp:
+            self.image_ = data
+        else:
 
-        self.image_  = q2n.gray2qimage(data, True)
+            self.image_  = q2n.gray2qimage(data, True)
         self.mask_ = None
         self.original_mask_ = None
         self.hist_data_ = None
@@ -218,7 +305,9 @@ class image_data:
         else:
             data = np.array(Image.open(self.fn).convert("L"))
         return data
-            
+    
+    def convert(self):
+        self.image_ = q2n.gray2qimage(self.image_, True)
 
     @property
     def title(self):
@@ -250,7 +339,7 @@ class image_data:
     @original_mask.setter
     def original_mask(self, value):
         self.changed = True
-        self.found_edge = len(np.unique(value)) > 1
+        
         self.original_mask_ = value
 
     @property
@@ -303,7 +392,7 @@ class PreviewDelegate(QStyledItemDelegate):
         if data.mask is None:
             color = QColor(COLORS["not yet"])
             
-        elif data.original_mask is not None and np.min(data.original_mask) == 0:
+        elif data.original_mask is not None and np.sum(data.original_mask) > 0:
             color = QColor(COLORS["mask found"])
         else:
             color = QColor(COLORS["nothing found"])
@@ -450,15 +539,52 @@ class ImageViewer(QWidget):
         self.parent().metadataWidget.show_data(idxs)
 
 
-    def load_files(self, files=None):
+    def load_files(self, files, dataset=None, njobs=1):
+        # global CURRENTCOUNTER
+        # def getCallback(maxNumber):
+        #     def callback(result):
+        #         global CURRENTCOUNTER
+        #         CURRENTCOUNTER += 1
+        #         self.mainwidget.setProgress(CURRENTCOUNTER/maxNumber * 100, True)
+        #     return callback
+        a = self.parent().metadataWidget.runWidget
 
-        for n, fn in enumerate(files):
-
-            item = image_data(fn)
-            self.model.previews.append(item)
-            self.parent().setProgress((1+ n)/len(files) * 100)
+        njobs = int(a.configLineEdits["njobs"][0].text())
 
 
+        pixelSizes = {path:None for path in files}
+        nonMrcFiles = [path for path in files if Path(path).suffix != ".mrc"]
+        if len(nonMrcFiles) > 0:
+            pixelSizeWidget = NonMrcFilesPixelSizeWidget(self, len(nonMrcFiles))
+            result = pixelSizeWidget.exec()
+            if result == 0:
+                return
+            ps = pixelSizeWidget.getPixelSize()
+            for file in nonMrcFiles:
+                pixelSizes[file] = ps 
+
+
+        if njobs <= 1:
+            for n, fn in enumerate(files):
+
+                item = image_data(fn, dataset)
+                if pixelSizes[fn] is not None:
+                    item.metadata["Pixel spacing"] = pixelSizes[fn] 
+                self.model.previews.append(item)
+                self.parent().setProgress((1+ n)/len(files) * 100)
+        else:
+            # CURRENTCOUNTER = 0
+            global CURRENT_CONFIG
+            with mp.get_context("spawn").Pool(njobs) as pool:
+                result = [pool.apply_async(loadImageData, [file, dataset, CURRENT_CONFIG]) for file in files]
+                for n,(res, fn) in enumerate(zip(result, files)):
+                    item:image_data = res.get()
+                    item.convert()
+                    if pixelSizes[fn] is not None:
+                        item.metadata["Pixel spacing"] = pixelSizes[fn] 
+                    self.model.previews.append(item)
+                    self.parent().setProgress((1+ n)/len(files) * 100)
+                    
         self.model.layoutChanged.emit()
 
         self.view.resizeRowsToContents()
@@ -587,6 +713,7 @@ class histWidget(QFrame):
             
             id.mask = q2n.array2qimage(new_mask, True)
             id.original_mask = new_mask
+            id.found_edge = np.max(new_mask) > 0
             id.best_gridsize = gridsize
             id.metadata["Threshold"] = newthreshold
             
@@ -679,54 +806,75 @@ class thumbnailWidget(QFrame):
 
 
 class CorrectDoubleValidator(QValidator):
-    def __init__(self, low, top):
+    def __init__(self, low, top, default=None):
         super().__init__()
-        self.low = float(low)
-        self.top = float(top)
+        
+        self.low = low
+        self.top = top
+        self.default = default
     
     def validate(self, a0: str, a1: int):
-        if a0 == "":
+        if a0 == "" or a0 == "-":
             return QValidator.State.Intermediate, a0, a1
         try:
-            a0 = float(a0)
+            if a0[0] == "-" and self.low is not None and self.low < 0 and len(a0) > 1:
+                float(a0[1:])
+            else:
+                a2 = float(a0)
         except:
             return QValidator.State.Invalid, str(self.low), len(str(self.low))
 
-        if a0 < self.low:
+        if self.low is not None and float(a0) < self.low:
+            return QValidator.State.Intermediate, a0, a1
             a0 = self.low
-        elif a0 > self.top:
+        elif self.top is not None and float(a0) > self.top:
             a0 = self.top 
         return QValidator.State.Acceptable, str(a0), len(str(a0))
     
     def fixup(self, a0: str) -> str:
+        if self.default is not None:
+            return str(self.default)
+        
         return str(self.low)
 
 class CorrectIntValidator(QValidator):
-    def __init__(self, low, top):
+    def __init__(self, low, top, default=None):
         super().__init__()
         self.low = low
         self.top = top
+        self.default = default
     
     def validate(self, a0: str, a1: int):
-        if a0 == "":
+        if a0 == "" or a0=="-":
             return QValidator.State.Intermediate, a0, a1
         try:
-            a0 = int(a0)
+            if a0[0] == "-" and self.low is not None and self.low < 0 and len(a0) > 1:
+                int(a0[1:])
+            else:
+                a2 = int(a0)
         except:
             return QValidator.State.Invalid, str(self.low), len(str(self.low))
 
-        if a0 < self.low:
+        if self.low is not None and int(a0) < self.low:
+            return QValidator.State.Intermediate, a0, a1
             a0 = self.low
-        elif a0 > self.top:
+        elif self.top is not None and int(a0) > self.top:
             a0 = self.top 
         return QValidator.State.Acceptable, str(a0), len(str(a0))
     
     def fixup(self, a0: str) -> str:
+        if self.default is not None:
+            return str(self.default)
         return str(self.low)
+
+
+
+
+
 
 class runWidget(QFrame):
     def __init__(self, parent):
-        global CURRENT_CONFIG
+        global CURRENT_CONFIG, MAX_CORES
         super().__init__(parent)
         self.setLayout(QGridLayout())
 
@@ -736,37 +884,69 @@ class runWidget(QFrame):
         self.setFrameShape(QFrame.Panel)
         self.setFrameShadow(QFrame.Raised)
         self.setLineWidth(1)
-        self.njobsLabel = QLabel("# CPUs to use")
-        self.njobsLineEdit = QLineEdit(str(CURRENT_CONFIG["parameters"]["njobs"]))
+        # self.njobsLabel = QLabel("# CPUs to use")
+        # self.njobsLineEdit = QLineEdit(str(CURRENT_CONFIG["parameters"]["njobs"]))
         # self.thresholdLabel = QLabel("Threshold")
         # self.thresholdLineEdit = QLineEdit(str(CURRENT_CONFIG["parameters"]["threshold"]))
         # self.thresholdLineEdit.setValidator(QDoubleValidator())
         self.runAllButton = QPushButton(text="Mask all")
         self.runnSelectedButton = QPushButton(text="Mask selected")
 
-        self.njobsLineEdit.setValidator(CorrectIntValidator(1, MAX_CORES,))
+        # self.njobsLineEdit.setValidator(CorrectIntValidator(1, MAX_CORES,))
         
-        self.toggleResizeCheckbox = QCheckBox(text="Resize")
-        self.toggleResizeCheckbox.setChecked(CURRENT_CONFIG["parameters"]["resize_bool"])
-        self.toggleResizeCheckbox.setToolTip("Resize the image during edge detection for faster calculations")
-        self.resizeLineEdit = QLineEdit(str(CURRENT_CONFIG["parameters"]["resize_value"]))
-        self.resizeLineEdit.setToolTip("Pixel spacing in px/Å for resizing")
-  
-        self.resizeLineEdit.setValidator(CorrectDoubleValidator(0.001, 100))
 
-        self.layout().addWidget(self.toggleResizeCheckbox, 0,0)
-        self.layout().addWidget(self.resizeLineEdit,0,1)
+
+        #("threshold","Threshold",float, None, None), ("gridsizes","Gridsizes", float, 0.001,None)
+        self.key_names = [("to_size","Resize to [Å/px]", float, 1,None), ("outside_circle_coverage", "Outside of circle coverage", float,0,1), ("inner_circle_coverage", "Inside of circle coverage", float, 0,1),
+                           ("detect_ring", "Detect ring", bool,None, None), ("ring_width", "Ring width", float, 0.001, None), ("njobs", "# CPUs to use", int, 1, MAX_CORES),("wobble", "Wobble", float, 0, 0.2),
+                           ("high_pass_filter", "High pass sigma", int, 0, None)]
+
+        tooltips = {}
+
+
+        self.configLineEdits = {}
+
+        for counter, (key, name,t, l,h) in enumerate(self.key_names):
+            label = QLabel(name)
+            if t is bool:
+                lineedit = QCheckBox()
+                lineedit.setChecked(str(CURRENT_CONFIG["parameters"][key]) == "True")
+            elif t is float:
+                lineedit = QLineEdit(str(CURRENT_CONFIG["parameters"][key]))
+                lineedit.setValidator(CorrectDoubleValidator(l, h, CURRENT_CONFIG["parameters"][key]))
+            elif t is int:
+               
+                lineedit = QLineEdit(str(CURRENT_CONFIG["parameters"][key]))
+                lineedit.setValidator(CorrectIntValidator(l, h))
+            self.layout().addWidget(label, counter // 2, (counter % 2)*2)
+            self.layout().addWidget(lineedit, counter // 2, (counter % 2)*2 + 1)
+            
+            self.configLineEdits[key] = (lineedit, t)
+            if key in tooltips:
+                label.setToolTip(tooltips[key])
+                lineedit.setToolTip(tooltips[key])
+
+        # self.toggleResizeCheckbox = QCheckBox(text="Resize")
+        # self.toggleResizeCheckbox.setChecked(CURRENT_CONFIG["parameters"]["resize_bool"])
+        # self.toggleResizeCheckbox.setToolTip("Resize the image during edge detection for faster calculations")
+        # self.resizeLineEdit = QLineEdit(str(CURRENT_CONFIG["parameters"]["resize_value"]))
+        # self.resizeLineEdit.setToolTip("Pixel spacing in px/Å for resizing")
+  
+        # self.resizeLineEdit.setValidator(CorrectDoubleValidator(0.001, 100))
+
+        # self.layout().addWidget(self.toggleResizeCheckbox, 0,0)
+        # self.layout().addWidget(self.resizeLineEdit,0,1)
 
         
         self.runAllButton.clicked.connect(self.runAll)
         self.runnSelectedButton.clicked.connect(self.runSelected)
         self.number_of_images = 1
         self.current_number_of_images = 0
-        self.layout().addWidget(self.njobsLabel, 1,0)
-        self.layout().addWidget(self.njobsLineEdit, 1,1)
-
-        self.layout().addWidget(self.runAllButton,2,0)
-        self.layout().addWidget(self.runnSelectedButton,2,1)
+        # self.layout().addWidget(self.njobsLabel, 1,0)
+        # self.layout().addWidget(self.njobsLineEdit, 1,1)
+    
+        self.layout().addWidget(self.runAllButton,counter+1,0)
+        self.layout().addWidget(self.runnSelectedButton,counter+1,1)
 
 
     def runAll(self):
@@ -789,7 +969,13 @@ class runWidget(QFrame):
     def runIndexes(self, indexes, image_datas):
         
         self.thread = QThread()
-        self.worker = Worker(indexes, image_datas, int(self.njobsLineEdit.text()), self.toggleResizeCheckbox.isChecked(),float(self.resizeLineEdit.text()))
+        parameters = {}
+        for key, (le, t) in self.configLineEdits.items():
+            if t is bool:
+                parameters[key] = le.isChecked()
+            else:
+                parameters[key] = t(le.text())
+        self.worker = Worker(indexes, image_datas, parameters)
         
         # self.worker.njobs = int(self.njobsLineEdit.text())
         self.number_of_images = len(indexes)
@@ -806,26 +992,46 @@ class runWidget(QFrame):
 
 
     def testWorker(self, emit):
+        global TIMER
         if len(emit) == 1:
             return
-        (row, col), mask, hist_data, gridsize = emit
+        
+        (row, col), mask, hist_data, gridsize,resized_mask, found_edge = emit
+        now = datetime.now()
         self.current_number_of_images += 1
         self.parent().parent().setProgress(self.current_number_of_images / self.number_of_images * 100)
+        TIMER["progress"] += (datetime.now() - now).total_seconds()
+        now = datetime.now()
         view:QTableView = self.parent().parent().imageviewer.view 
         data:image_data = view.model().index(row,col).data()
-        data.mask = q2n.array2qimage(mask, True)
+        data.mask = q2n.gray2qimage(resized_mask, True) # q2n.array2qimage(mask, True)
+        TIMER["q2n"] += (datetime.now() - now).total_seconds()
+        now = datetime.now()
         data.original_mask = mask
+        data.found_edge = found_edge
+        TIMER["found_edge"] += (datetime.now() - now).total_seconds()
+        now = datetime.now()
         data.hist_data = hist_data
         data.best_gridsize = gridsize
+
         index = view.model().createIndex(row, col)
+        TIMER["index"] += (datetime.now() - now).total_seconds()
+        now = datetime.now()
         view.selectionModel().clearSelection()
+        TIMER["clear"] += (datetime.now() - now).total_seconds()
+        now = datetime.now()
         view.selectionModel().select(index,QItemSelectionModel.SelectionFlag.Select)
+        TIMER["select"] += (datetime.now() - now).total_seconds()
+        now = datetime.now()
         view.model().dataChanged.emit(index, index)
+        TIMER["emit"] += (datetime.now() - now).total_seconds()
+        now = datetime.now()
+        # print(row, col)
 
     def finishedRunning(self):
-        global DISABLE_FUNCTION
+        global DISABLE_FUNCTION, TIMER
         self.parent().parent().setProgress(100)
-        
+        TIMER = defaultdict(lambda:0)
         DISABLE_FUNCTION(False)
 
     def runSelected(self):
@@ -924,6 +1130,9 @@ class rightWidget(QWidget):
 
 
 class QFloatListValidator(QValidator):
+    def __init__(self, parent=None, default=None) -> None:
+        self.default = default
+        super().__init__(parent)
     def validate(self, a0: str, a1: int):
         FloatValidator = QDoubleValidator()
         if len(a0) == 0:
@@ -943,7 +1152,10 @@ class QFloatListValidator(QValidator):
             result = result[:-1]
         return (QValidator.State.Acceptable, result, len(result))
 
-        return super().validate(a0, a1)
+    def fixup(self, a0: str) -> str:
+        if len(a0) == 0:
+            return str(self.default)
+        return super().fixup(a0)
 
 
 
@@ -951,6 +1163,7 @@ class QFloatListValidator(QValidator):
 
 class metadataWidget(QFrame):
     def __init__(self, parent):
+        global CURRENT_CONFIG
         super().__init__(parent)
         self.setLayout(QGridLayout())
         self.setFrameShape(QFrame.Panel)
@@ -968,8 +1181,8 @@ class metadataWidget(QFrame):
         self.pixelspacingLabelDesc = QLabel("Pixel spacing [px/Å]:")
         self.pixelspacingLabel = QLineEdit("")
         self.pixelspacingLabel.editingFinished.connect(self.setPixelspacing)
-        validator = QDoubleValidator()
-        validator.setBottom(0.001)
+        validator = CorrectDoubleValidator(0.001, None, default=1)
+        # validator.setBottom(0.001)
         self.pixelspacingLabel.setValidator(validator)
 
         self.gridsizeLabelDesc = QLabel("Grid hole size [µm]:")
@@ -977,11 +1190,11 @@ class metadataWidget(QFrame):
 
         self.thresholdLabelDesc = QLabel("Threshold")
         self.thresholdLineEdit = QLineEdit("")
-        self.thresholdLineEdit.setValidator(QDoubleValidator())
+        self.thresholdLineEdit.setValidator(CorrectDoubleValidator(None, None, default=CURRENT_CONFIG["parameters"]["threshold"]))
         self.thresholdLineEdit.editingFinished.connect(self.setThreshold)
         self.thresholdLineEdit.setToolTip("Threshold for finding the edge. Defaul is 0.02. Values to threshold are shown in the histogram after trying to mask the images.")
 
-        self.gridsizeLineEdit.setValidator(QFloatListValidator())
+        self.gridsizeLineEdit.setValidator(QFloatListValidator(default=CURRENT_CONFIG["parameters"]["gridsizes"][0]))
         self.gridsizeLineEdit.setToolTip("Size of the grid hole sizes in µm. If unsure, you can input multiple values seperated by commas and it will try to find the best one.")
         self.gridsizeLineEdit.editingFinished.connect(self.setGridsize)
 
@@ -1047,21 +1260,46 @@ class metadataWidget(QFrame):
         idxs = self.parent().parent().imageviewer.view.selectionModel().selectedIndexes()
         new_idxs = [idx.row() * self.parent().parent().imageviewer.model.columnCount() + idx.column() for idx in idxs]
         ids = [self.parent().parent().imageviewer.model.previews[idx] for idx in new_idxs]
-        for id in ids:
-            id.metadata["Threshold"] = threshold
-            if not id.hist_data is None:
-                id:image_data                 
-                hist_data = id.hist_data[id.best_gridsize]
-                edges = hist_data["edges"]
-                values = hist_data["values"]
 
-                if np.max(edges) >= threshold:
-                    
-                    new_mask = reevaluateMask(hist_data["center"], id.best_gridsize, id.metadata["Pixel spacing"],id.metadata["Dimensions"])
-                else:
-                    new_mask = np.zeros(id.metadata["Dimensions"], np.uint8)
-                id.original_mask = new_mask
-                id.mask = q2n.gray2qimage(new_mask, True)
+
+        
+        rw:runWidget = self.parent().runWidget
+        njobs = int(rw.configLineEdits["njobs"][0].text())
+        if njobs <= 1:
+            for id in ids:
+                id.metadata["Threshold"] = threshold
+                if not id.hist_data is None:
+                    id:image_data                 
+                    hist_data = id.hist_data[id.best_gridsize]
+                    edges = hist_data["edges"]
+                    # values = hist_data["values"]
+                    if np.max(edges) >= threshold:
+                        
+                        new_mask = reevaluateMask(hist_data["center"], id.best_gridsize, id.metadata["Pixel spacing"],id.metadata["Dimensions"])
+                    else:
+                        new_mask = np.zeros(id.metadata["Dimensions"], np.uint8)
+                    id.original_mask = new_mask
+                    id.found_edge = np.max(new_mask) > 0
+                    id.mask = q2n.gray2qimage(new_mask, True)
+        else:
+            reevaluateMaskParameters = []
+            for id in ids:
+                id.metadata["Threshold"] = threshold
+                if not id.hist_data is None:
+                    id:image_data                 
+                    hist_data = id.hist_data[id.best_gridsize]
+                    edges = hist_data["edges"]
+                    reevaluateMaskParameters.append((hist_data["center"], id.best_gridsize, id.metadata["Pixel spacing"],id.metadata["Dimensions"], threshold, np.max(edges), id))
+
+            with mp.get_context("spawn").Pool(njobs) as pool:
+                result = [pool.apply_async(reevaluateMaskMP, [center, gridsize, ps, shape, threshold, max_], ) for (center, gridsize, ps, shape, threshold, max_, id) in reevaluateMaskParameters]
+                for n, (res, params) in enumerate(zip(result, reevaluateMaskParameters)):
+                    id = params[-1]
+                    mask, found = res.get()
+                    id.original_mask = mask
+                    id.found_edge = found
+                    id.mask = q2n.gray2qimage(mask, True)
+                    self.parent().parent().setProgress((n+1)/len(result) * 100,True)
         if len(idxs) == 1:
             self.parent().parent().imageviewer.view.selectionModel().clearSelection()
             self.parent().parent().imageviewer.view.selectionModel().select(idxs[0],QItemSelectionModel.SelectionFlag.Select)
@@ -1093,28 +1331,65 @@ class mainWidget(QWidget):
     def pushed_button(self):
         self.imageviewer.load_files()
 
-    def setProgress(self, progress):
+    def setProgress(self, progress, update=False):
         progress = round(progress)
         self.progressBar.setValue(progress)
-
+        if update:
+            QApplication.processEvents()
 
     def sizeHint(self):
         # All items the same size.
         return QSize(1600, 1000)
 
 class MainWindow(QMainWindow):
-    def __init__(self):
+    def __init__(self, custom_parent=None):
         super().__init__()
-        
+
+        global CURRENT_CONFIG, DISABLE_FUNCTION
+        global COLORS_ALTERNATIVE, COLORS, COLORS_DEFAULT
+        CURRENT_CONFIG = load_config_file()
+        if CURRENT_CONFIG["misc"]["colorblind_mode"]:
+            COLORS = COLORS_ALTERNATIVE
+        else:
+            COLORS = COLORS_DEFAULT
+
+
+        self.customParent=custom_parent
         self.mainwidget = mainWidget(self)
         self.createMenu()
         self.setCentralWidget(self.mainwidget)
         self.setWindowTitle("Grid edge detector")
+
+        DISABLE_FUNCTION = getDisableEverythingFunction(self)
     
     def createMenu(self):
         menuBar = self.menuBar()
         self.filesMenu = QMenu("Files", menuBar)
         self.loadFilesAction = self.filesMenu.addAction("Load files")
+        self.importMenuBar = QMenu("Import", self.filesMenu)
+        self.filesMenu.addMenu(self.importMenuBar)
+        self.exportMenuBar = QMenu("Export", self.filesMenu)
+        self.filesMenu.addMenu(self.exportMenuBar)
+        try:
+            from matk.gui.dataset import Dataset, get_all_dataset_names
+
+            self.importDatasetMenu = self.importMenuBar.addMenu("MATK dataset")
+            self.exportDatasetMenu = self.exportMenuBar.addMenu("MATK dataset")
+            self.exportDatasetMenu.aboutToShow.connect(self.openedExportDataset)
+            # self.exportDatasetMenu.hovered.connect(self.openedExportDataset)
+            
+            names = sorted(list(get_all_dataset_names()))
+            for name in names:
+                act = self.importDatasetMenu.addAction(name)
+                act.triggered.connect(lambda state, x=name: self.loadDataset(x) )
+
+        except Exception as e:
+            self.importDataset = self.importMenuBar.addMenu("MATK dataset")
+            self.exportDatasetMenu = self.exportMenuBar.addMenu("MATK dataset")
+            self.importDataset.setEnabled(False)
+            self.exportDatasetMenu.setEnabled(False)
+        
+
         self.saveFilesAction = self.filesMenu.addAction("Save all masks")
         self.saveSelectedFilesAction = self.filesMenu.addAction("Save selected masks")
         self.saveMaskedImagesAction = self.filesMenu.addAction("Save all masked images")
@@ -1122,6 +1397,7 @@ class MainWindow(QMainWindow):
         menuBar.addMenu(self.filesMenu)
         
         self.loadFilesAction.triggered.connect(self.loadFiles)
+        
         self.saveFilesAction.triggered.connect(self.saveAllMasks)
         self.saveSelectedFilesAction.triggered.connect(self.saveSelectedMasks)
         self.saveMaskedImagesAction.triggered.connect(self.saveAllMaskedImages)
@@ -1135,6 +1411,116 @@ class MainWindow(QMainWindow):
         # self.createDefaultConfigFileAction.triggered.connect(self.createDefaultConfig)
         self.toggleColorblindModeAction.triggered.connect(self.toggleColorblindMode)
         menuBar.addMenu(self.configMenu)
+
+    def openedExportDataset(self):
+
+        datasets = set()
+        for img_data in self.mainwidget.imageviewer.model.previews:
+            if img_data.dataset is not None:
+                datasets.add(img_data.dataset) 
+        
+        
+        self.exportDatasetMenu.clear()
+        
+        for name in datasets:
+            act = self.exportDatasetMenu.addAction(name)
+            act.triggered.connect(lambda state, x=name:self.exportDataset(name))
+
+    def exportDataset(self, dataset):
+        global CURRENTCOUNTER
+        
+        def getCallback(maxNumber):
+            def callback(result):
+                global CURRENTCOUNTER
+                CURRENTCOUNTER += 1
+                self.mainwidget.setProgress(CURRENTCOUNTER/maxNumber * 100, True)
+            return callback
+        from matk.gui.dataset import Dataset
+        from matk.matk_analysis.analyser import Analyser, AnalyserWrapper
+        global MAX_CORES
+        dataset:Dataset = Dataset.load(dataset)
+        number_of_files = 0
+        for img_data in self.mainwidget.imageviewer.model.previews:
+            if img_data.dataset is not None and img_data.dataset == dataset.name:
+                img_data:image_data
+                if img_data.found_edge:
+                    if Path(img_data.fn) in dataset.analysers:
+                       number_of_files += 1
+                    elif str(img_data.fn) in dataset.analysers:
+                        number_of_files += 1
+
+        dialog = QDialog()
+        dialog.setWindowTitle("Applying masks to dataset.")
+        dialog.setLayout(QVBoxLayout())
+        label = QLabel(f"Applying masks to dataset removes all membranes found on the grid.\nThis is not reversable without running the segmentation again.\nFound masks for {number_of_files} files from this dataset.")
+        spinbox = QSpinBox()
+        spinbox.setMinimum(1)
+        spinbox.setMaximum(MAX_CORES)
+        spinbox.setValue(1)
+        njobsLabel = QLabel("# of CPUs to use")
+        # lineedit.setValidator(CorrectIntValidator(1, MAX_CORES,1))
+        button_box = QDialogButtonBox(QDialogButtonBox.Ok | QDialogButtonBox.Cancel)
+        button_box.accepted.connect(dialog.accept)
+        button_box.rejected.connect(dialog.reject)
+
+        njobsLayout = QHBoxLayout()
+        njobsLayout.addWidget(njobsLabel)
+        njobsLayout.addWidget(spinbox)
+        layout = dialog.layout()
+        layout.addWidget(label)
+        layout.addLayout(njobsLayout)
+        layout.addWidget(button_box)
+        if dialog.exec_() == QDialog.Accepted:
+            njobs = spinbox.value()
+        else:
+            return
+        paths_masks = []
+        csv = dataset.csv
+        for img_data in self.mainwidget.imageviewer.model.previews:
+            if img_data.dataset is not None and img_data.dataset == dataset.name:
+                img_data:image_data
+                if img_data.found_edge:
+                    indexes = csv[csv["Micrograph"] == Path(img_data.fn).stem]["Index"].to_list()
+                    if Path(img_data.fn) in dataset.analysers:
+                        analyser_path = dataset.analysers[Path(img_data.fn)] 
+                    elif str(img_data.fn) in dataset.analysers:
+                        analyser_path = dataset.analysers[str(img_data.fn)] 
+                    else:
+                        continue
+                    paths_masks.append((analyser_path, img_data.original_mask, indexes))
+        
+        self.mainwidget.setProgress(0)
+        CURRENTCOUNTER = 0
+        if njobs > 1:
+            with mp.get_context("spawn").Pool(njobs) as pool:
+                result = [pool.apply_async(applyMask, [path, mask, index], callback=getCallback(len(paths_masks)+1)) for (path, mask, index) in paths_masks]
+                [res.get() for res in result] 
+        else:
+            for (path, mask, index) in paths_masks:
+                applyMask(path, mask, index)
+                CURRENTCOUNTER += 1
+                self.mainwidget.setProgress(CURRENTCOUNTER/(len(paths_masks)+1) * 100,True)
+            
+        dataset.to_csv(njobs)
+        self.mainwidget.setProgress(100)
+
+
+    def loadDataset(self, name):
+        global DISABLE_FUNCTION
+        from matk.gui.dataset import Dataset
+        dataset:Dataset = Dataset.load(name)
+        files = dataset.micrograph_paths
+        if len(files) > 0:
+            try:
+                DISABLE_FUNCTION(True)
+                self.mainwidget.imageviewer.load_files(files, dataset)
+                DISABLE_FUNCTION(False)
+            except Exception as e:
+                e = traceback.format_exc()
+                print(e)                
+                DISABLE_FUNCTION(False)
+
+
 
     def openConfigFile(self):
         global CONFIG_FILE, CURRENT_CONFIG
@@ -1191,6 +1577,7 @@ class MainWindow(QMainWindow):
         DISABLE_FUNCTION(True)
         self.mainwidget.imageviewer.load_files(names)
         DISABLE_FUNCTION(False)
+        
 
     def saveAllMasks(self):
         image_datas = self.mainwidget.imageviewer.model.previews
@@ -1263,7 +1650,11 @@ class MainWindow(QMainWindow):
             COLORS = COLORS_DEFAULT
         self.mainwidget.metadataWidget.legendWidget.loadColors() 
         self.mainwidget.imageviewer.model.layoutChanged.emit()
-
+    
+    def closeEvent(self, a0) -> None:
+        if self.customParent is not None:
+            self.customParent.child_closed()
+        return super().closeEvent(a0)
 
 
 class ConfigWindow(QWidget):
@@ -1428,12 +1819,13 @@ def getDisableEverythingFunction(window):
     def disableEverything(disable=True):
         global CURRENTLY_RUNNING 
         CURRENTLY_RUNNING = disable 
-
-        window.loadFilesAction.setDisabled(disable)
-        window.saveFilesAction.setDisabled(disable)
-        window.saveSelectedMaskedImagesAction.setDisabled(disable)
-        window.saveMaskedImagesAction.setDisabled(disable)
-        window.saveSelectedFilesAction.setDisabled(disable)
+        
+        window.filesMenu.setDisabled(disable)
+        # window.loadFilesAction.setDisabled(disable)
+        # window.saveFilesAction.setDisabled(disable)
+        # window.saveSelectedMaskedImagesAction.setDisabled(disable)
+        # window.saveMaskedImagesAction.setDisabled(disable)
+        # window.saveSelectedFilesAction.setDisabled(disable)
         window.mainwidget.metadataWidget.runWidget.runAllButton.setDisabled(disable)
         window.mainwidget.metadataWidget.runWidget.runnSelectedButton.setDisabled(disable)
 
@@ -1441,16 +1833,10 @@ def getDisableEverythingFunction(window):
     return disableEverything
 
 def main():
-    global CURRENT_CONFIG, DISABLE_FUNCTION
-    global COLORS_ALTERNATIVE, COLORS, COLORS_DEFAULT
-    CURRENT_CONFIG = load_config_file()
-    if CURRENT_CONFIG["misc"]["colorblind_mode"]:
-        COLORS = COLORS_ALTERNATIVE
-    else:
-        COLORS = COLORS_DEFAULT
+    
     app = QApplication(sys.argv)
     window = MainWindow()
-    DISABLE_FUNCTION = getDisableEverythingFunction(window)
+    
     window.show()
     app.exec_()
 

@@ -11,7 +11,7 @@ DESCRIPTION = 'A GUI for carbon and other grid edge detection for electron micro
 URL = 'https://github.com/Croxa/GridEdgeDetector'
 EMAIL = 'p.schoennenbeck@fz-juelich.de'
 AUTHOR = 'Philipp Schönnenbeck'
-REQUIRES_PYTHON = '>=3.10'
+REQUIRES_PYTHON = '>=3.9'
 VERSION = '0.1.0'
 
 # What packages are required for this module to be executed?
@@ -20,13 +20,13 @@ REQUIRED = [
     "numpy>=1.19",
     "pandas>=1.3.5",
     "pyqtgraph>=0.12.4",
-    "python>=3.10",
+    # "python>=3.9",
     "scipy>=1.7.3",
     "toml>=0.10.2",
     "psutil>=5.9.0",
     "matplotlib>=3.2.2",
     "scikit-image>=0.19.2",
-    "pyqt5==5.15.7",
+    "pyqt5==5.15.9",
     "qimage2ndarray==1.9.0"
 ]
 
