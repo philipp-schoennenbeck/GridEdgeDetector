@@ -3,220 +3,21 @@ import numpy as np
 import mrcfile
 from skimage.draw import disk
 from scipy.signal import convolve
+from scipy.ndimage import convolve as nd_convolve
 from pathlib import Path
 from PIL import Image
 from matplotlib import pyplot as plt
 import sparse
 from PIL import Image, ImageOps
-
-# def mask_carbon_edge_per_file(path, gridsizes, cut_off, ps, circles=None, idx=None, get_hist_data=False, to_resize=False, resize=7):
-#     if isinstance(path, (str, Path)):
-#         path = Path(path)
-#         if path.suffix in [".mrc", ".MRC", ".rec", ".REC"]:
-#             image = mrcfile.open(path, permissive=True).data*1
-#         else:
-#             image = np.array(Image.open(path).convert("L"))
-#     else:
-#         image = path
-#     data = image - np.mean(image)
-#     data /= np.std(data)
-    
-#     if to_resize:
-#         original_ps = ps
-#         original_shape = data.shape
-#         ratio = ps / resize
-#         new_shape = None
-#         if ratio < 1:
-#             new_shape = [int(os * ratio) for os in original_shape]
-#             data = np.array(Image.fromarray(data).resize(new_shape[::-1]))
-#             ps = resize
-
-#     differences = []
-#     coords = []
-#     # convolved_images = []
-#     # convolved_images_neg = []
-#     if get_hist_data:
-#         hist_data = {}
-#     for gridsize in gridsizes:
+# from matplotlib import pyplot as plt
 
 
-        
-#         if circles is None:
-#             radius = int(gridsize/ps // 2)
-#             circle_coords = disk((radius,radius), radius)
-#             circle = np.zeros((radius*2, radius*2))
-#             circle[circle_coords[0], circle_coords[1]] = 1
-#             circle = circle/np.sum(circle)
-#             neg_circle = (circle==0)*1
-#             neg_circle = neg_circle / np.sum(neg_circle)
-#             combined_circle = circle - neg_circle
-#             diff_image = convolve(data, combined_circle, "full", method="fft")
-#             # convolved_image_neg = convolve(data, neg_circle, "full", method="fft")
-#         else:
-#             convolved_image = convolve(data, circles[gridsize][0], "full", method="fft")
-#             convolved_image_neg = convolve(data, circles[gridsize][1], "full", method="fft")
-#             diff_image = convolved_image - convolved_image_neg
-        
-#         coord = np.argmax(diff_image)
-#         coord = np.unravel_index(coord, diff_image.shape)
-#         if circles is None:
-#             coord = coord[0] - circle.shape[0]//2, coord[1] - circle.shape[1]//2
-#         else:
-#             coord = coord[0] - circles[gridsize][0].shape[0]//2, coord[1] - circles[gridsize][0].shape[1]//2
-
-#         differences.append(np.max(diff_image))
-#         if to_resize and ratio < 1:
-#             coord = (np.array(coord) / ratio).astype(np.int32)
-#         coords.append(coord)
-#         # convolved_images.append(convolved_image)
-#         # convolved_images_neg.append(convolved_image_neg)
-
-#         if get_hist_data:
-#             values, edges = np.histogram(diff_image, bins=50)
-            
-#             hist_data[gridsize] = {"values":values, "edges":edges, "threshold":cut_off, "center":coord}
-
-#     argmax = np.argmax(differences)
-#     coord = coords[argmax]
-#     if to_resize and ratio < 1:
-#         ps = original_ps
-
-#     mask = np.zeros_like(image, dtype=np.uint8)
-#     if np.max(differences ) > cut_off:
-#         yy,xx = disk(coord, gridsizes[np.argmax(differences)]/ps // 2, shape=image.shape,)
-#         mask[yy,xx] = 1
-#     else:
-#         mask = np.ones_like(image, dtype=np.uint8)
-#     # if idx is not None:
-#     #     output = Path("/Data/erc-3/schoennen/membrane_analysis_toolkit/test_code/output_for_progress_report_20221112")
-#     #     plt.imsave(output / f"{idx}_original.png",image, cmap="gray")
-#     #     plt.imsave(output / f"{idx}_mask.png", mask, vmin=0, vmax=1, cmap="gray")
-#     #     plt.imsave(output / f"{idx}_conv.png",convolved_image, cmap="gray")
-#     #     plt.imsave(output / f"{idx}_conv_neg.png",convolved_image_neg, cmap="gray")
-#     #     plt.imsave(output / f"{idx}_diff_image.png",diff_image, cmap="gray")
-#     if get_hist_data:
-#         return mask, hist_data, gridsizes[np.argmax(differences)]
-#     return mask
-
-
-# def mask_carbon_edge_per_file(path, gridsizes, cut_off, ps, circles=None, idx=None, get_hist_data=False, to_resize=False, resize=7):
-#     if isinstance(path, (str, Path)):
-#         path = Path(path)
-#         if path.suffix in [".mrc", ".MRC", ".rec", ".REC"]:
-#             image = mrcfile.open(path, permissive=True).data*1
-#         else:
-#             image = np.array(Image.open(path).convert("L"))
-#     else:
-#         image = path
-#     data = image - np.mean(image)
-#     data /= np.std(data)
-    
-#     if to_resize:
-#         original_ps = ps
-#         original_shape = data.shape
-#         ratio = ps / resize
-#         new_shape = None
-#         if ratio < 1:
-#             new_shape = [int(os * ratio) for os in original_shape]
-#             data = np.array(Image.fromarray(data).resize(new_shape[::-1]))
-#             ps = resize
-
-#     differences = []
-#     coords = []
-#     # convolved_images = []
-#     # convolved_images_neg = []
-#     if get_hist_data:
-#         hist_data = {}
-#     for gridsize in gridsizes:
-
-
-        
-#         if circles is None:
-#             radius = int(gridsize/ps // 2)
-#             circle_coords = disk((radius,radius), radius)
-            
-#             circle = np.zeros((radius*2, radius*2))
-#             circle[circle_coords[0], circle_coords[1]] = 1
-#             circle = circle/np.sum(circle)
-#             neg_circle = (circle==0)*1
-#             neg_circle = neg_circle / np.sum(neg_circle)
-#             combined_circle = circle - neg_circle
-#             diff_image = convolve(data, combined_circle, "full", method="fft")
-#             # convolved_image_neg = convolve(data, neg_circle, "full", method="fft")
-#         else:
-#             convolved_image = convolve(data, circles[gridsize][0], "full", method="fft")
-#             convolved_image_neg = convolve(data, circles[gridsize][1], "full", method="fft")
-#             diff_image = convolved_image - convolved_image_neg
-        
-#         coord = np.argmax(diff_image)
-#         coord = np.unravel_index(coord, diff_image.shape)
-#         if circles is None:
-#             coord = coord[0] - circle.shape[0]//2, coord[1] - circle.shape[1]//2
-#         else:
-#             coord = coord[0] - circles[gridsize][0].shape[0]//2, coord[1] - circles[gridsize][0].shape[1]//2
-
-#         differences.append(np.max(diff_image))
-#         if to_resize and ratio < 1:
-#             coord = (np.array(coord) / ratio).astype(np.int32)
-#         coords.append(coord)
-#         # convolved_images.append(convolved_image)
-#         # convolved_images_neg.append(convolved_image_neg)
-
-#         if get_hist_data:
-#             values, edges = np.histogram(diff_image, bins=50)
-            
-#             hist_data[gridsize] = {"values":values, "edges":edges, "threshold":cut_off, "center":coord}
-
-#     argmax = np.argmax(differences)
-#     coord = coords[argmax]
-#     if to_resize and ratio < 1:
-#         ps = original_ps
-
-#     mask = np.zeros_like(image, dtype=np.uint8)
-#     if np.max(differences ) > cut_off:
-#         yy,xx = disk(coord, gridsizes[np.argmax(differences)]/ps // 2, shape=image.shape,)
-#         mask[yy,xx] = 1
-#     else:
-#         mask = np.ones_like(image, dtype=np.uint8)
-
-#     if get_hist_data:
-#         return mask, hist_data, gridsizes[np.argmax(differences)]
-#     return mask
-
-
-# def mask_carbon_edge(paths_or_images, gridsizes=[11000,11500,12000,12500, 13000,19000,19500,20000,20500,21000], cut_off=0.02, ps=7, njobs=1):
-#     import multiprocessing as mp
-#     circles = {}
-#     for gridsize in gridsizes:
-#         radius = int(gridsize/ps // 2)
-#         circle_coords = disk((radius,radius), radius)
-#         circle = np.zeros((radius*2, radius*2))
-#         circle[circle_coords[0], circle_coords[1]] = 1
-#         circle = circle/np.sum(circle)
-#         neg_circle = (circle==0)*1
-#         neg_circle = neg_circle / np.sum(neg_circle)
-#         circles[gridsize] = [circle, neg_circle]
-
-#     circle_coords = {gridsize:disk((int(gridsize/ps // 2), int(gridsize/ps // 2)), int(gridsize/ps // 2)) for gridsize in gridsizes}
-#     # 
-
-#     if njobs > 1:
-#         with mp.Pool(njobs) as pool:
-#             results = [pool.apply_async(mask_carbon_edge_per_file, [path, gridsizes, cut_off, ps, circles, idx]) for idx, path in enumerate(paths_or_images)]
-#             masks = [res.get() for res in results]
-#     else:
-
-#         masks = [mask_carbon_edge_per_file(path, gridsizes, cut_off, ps, circles) for path in paths_or_images]
-    
-        
-#     return masks
-#     #
  
 
 def gauss(fx,fy,sig):
-
     r = np.fft.fftshift(np.sqrt(fx**2 + fy**2))
-    
+    res = -2*np.pi**2*(r*sig)**2
+
     return np.exp(-2*np.pi**2*(r*sig)**2)
 
 def gaussian_filter(im,sig,apix):
@@ -255,16 +56,17 @@ def load_npz(file):
         data = np.moveaxis(data, lowest_axes, [0])
     return data
 
+suffix_function_dict = {
+    ".mrc":load_mrc,
+    ".png":load_jpg_png,
+    ".jpg":load_jpg_png,
+    ".jpeg":load_jpg_png,
+    ".npz":load_npz,
+    ".rec":load_mrc
+}
 
 def load_file(file):
-    suffix_function_dict = {
-        ".mrc":load_mrc,
-        ".png":load_jpg_png,
-        ".jpg":load_jpg_png,
-        ".jpeg":load_jpg_png,
-        ".npz":load_npz,
-        ".rec":load_mrc
-    }
+    global suffix_function_dict
     suffix = Path(file).suffix.lower()
     if suffix in suffix_function_dict:
         data = suffix_function_dict[suffix](file)
@@ -275,8 +77,258 @@ def load_file(file):
         raise ValueError(f"Could not find a function to open a {suffix} file.")
 
 
+
+
+def test_new_stuff(image, radius, pixel_size):
+    radius = int(radius)
+    y, x = np.ogrid[-radius: radius + 1, -radius: radius + 1]
+    circular_mask = x**2 + y**2 <= radius**2
+
+    # Normalize the mask to have values between 0 and 1
+    # circular_mask = circular_mask.astype(float) / circular_mask.sum()
+    circular_mask = circular_mask * 1
+
+    # Pad the image to handle border cases
+    padded_image = np.pad(image, radius, mode='constant', constant_values=0)
+    value_image = np.ones_like(image)
+    value_image = np.pad(value_image, radius, mode='constant', constant_values=0)
+    # Convolve the image with the circular mask
+
+
+    convolved_image = convolve(padded_image, circular_mask,"same",)
+    inside_size = convolve(value_image, circular_mask, "same",)
+
+
+    sum_total = np.sum(image)
+    size = image.size
+    outside_size = size - inside_size
+    outside_values = sum_total - convolved_image
+
+    mean_difference = np.zeros_like(convolved_image)
+    mask = np.logical_and(inside_size > 100, outside_size > 100)
+
+    mean_difference[mask] = np.abs(convolved_image[mask] / inside_size[mask] - outside_values[mask]/ outside_size[mask]) 
+
+    return mean_difference
+
+
+
+
+
+
+def create_difference_map(radius, detect_ring, ring_width, to_size, new_data, coverage_percentage, outside_coverage_percentage):
+    y, x = np.ogrid[-radius: radius + 1, -radius: radius + 1]
+    if not detect_ring:
+        circular_mask = x**2 + y**2 <= radius**2
+        threshold_mask = circular_mask
+    else:
+        circular_mask = np.logical_and(x**2 + y**2 <= (radius + ring_width/2/to_size)**2,x**2 + y**2 >= (radius - ring_width/2 / to_size)**2)
+        threshold_mask = x**2 + y**2 <= radius**2
+
+
+
+    circular_mask = circular_mask * 1
+
+    # Pad the image to handle border cases
+    padded_image = np.pad(new_data, radius, mode='constant', constant_values=0)
+    value_image = np.ones_like(new_data)
+    value_image = np.pad(value_image, radius, mode='constant', constant_values=0)
+    # Convolve the image with the circular mask
+
+
+    convolved_image = convolve(padded_image, circular_mask,"same",)
+    inside_size = convolve(value_image, circular_mask, "same",)
+    threshold_image = convolve(value_image, threshold_mask, "same" )
+
+
+    sum_total = np.sum(new_data)
+    size = new_data.size
+    outside_size = size - inside_size
+    outside_values = sum_total - convolved_image
+
+    output = np.zeros_like(convolved_image)
+    mask = np.logical_and(threshold_image > size * coverage_percentage, size - threshold_image > size * outside_coverage_percentage)
+
+    output[mask] = np.abs(convolved_image[mask] / inside_size[mask] - outside_values[mask]/ outside_size[mask])
+    return output
+
+
+
 def find_grid_hole_per_file(current_file, to_size=100, diameter=[12000], threshold=0.005, coverage_percentage=0.5, outside_percentage=1, outside_coverage_percentage=0.05,
-                             detect_ring=True, ring_width=1000, return_hist_data=False, pixel_size=None, wobble=0, high_pass=1500):
+                             detect_ring=True, ring_width=1000, return_hist_data=False, pixel_size=None, wobble=0, high_pass=1500,crop=50, distance=0, return_ring_width=0, **kwargs):
+    # TODO: fix wobble, faster disk by circular mask, strange low thingy (removes radius padding)
+    from datetime import datetime
+    now = datetime.now()
+
+    return_results = None
+    hist_data = {}
+    current_file = Path(current_file)
+    if current_file.suffix != ".mrc" and pixel_size is None:
+        raise TypeError(f"{current_file} is not mrc file and not pixel size was given")
+    if not isinstance(diameter, (list, tuple)):
+        diameter = [diameter]
+    for r in diameter:
+
+
+        radius = int(r/to_size // 2)  
+            
+        data, mrc_ps = load_file(current_file)
+
+        if pixel_size is None:
+            ps = mrc_ps
+        else:
+            ps = pixel_size
+
+        # Clip data
+        middle = np.median(data)
+        std = np.std(data)
+        left = middle - std * 4
+        right = middle + std * 4
+        data = np.clip(data, left, right)
+
+        # Normalize data
+        data = data -np.min(data)
+        data = data / np.max(data)
+
+
+        # Reshape image
+        ratio = ps / to_size
+        new_shape = [round(s * ratio) for s in data.shape]
+        new_data = np.array(Image.fromarray(data).resize(new_shape[::-1]))
+
+        
+        if not np.isclose(high_pass, 0):
+            sig = int(high_pass / to_size)
+            sig += (sig + 1) % 2
+            new_data = gaussian_filter(new_data,0,to_size) - gaussian_filter(new_data,sig,to_size)
+
+        if crop > 0:
+            cut_off = max(1, int(crop * ratio))
+            new_data = new_data[cut_off:-cut_off, cut_off:-cut_off]
+        else:
+            cut_off = 0
+        
+        # print(f"Preparing took {(datetime.now() - now).total_seconds()}s")
+        now = datetime.now()
+        output = create_difference_map(radius, detect_ring, ring_width, to_size, new_data, coverage_percentage, outside_coverage_percentage)
+        # print(f"Difference map took {(datetime.now() - now).total_seconds()}s")
+        now = datetime.now()
+        low = int(-radius)
+
+        highest_value = np.max(output)
+
+
+        
+        
+
+        wobble_steps = 0.0025
+        
+        if wobble>0:
+            seen_radii = set()
+            start = (1-wobble) * r/to_size / 2
+            end = (1+wobble) * r/to_size / 2
+            wobble_radii = np.arange(start=start, stop=end, step=wobble_steps * r / to_size / 2, )
+            wobble_radii = np.concatenate((wobble_radii, [end]))
+            
+            
+            for wobble_r in wobble_radii:
+                
+                wobble_r = int(wobble_r)
+                if wobble_r in seen_radii:
+                    continue
+                seen_radii.add(wobble_r)
+                new_output = create_difference_map(wobble_r, detect_ring, ring_width, to_size, new_data, coverage_percentage, outside_coverage_percentage)
+                current_max = np.max(new_output)
+                if current_max > highest_value:
+                    highest_value = current_max 
+                    output = new_output
+                    r = wobble_r * to_size * 2
+
+
+
+        circle_center = np.unravel_index(np.argmax(output), output.shape)
+
+
+        orig_center = ( np.array(circle_center) + cut_off + low ) / (ps/to_size)
+        orig_y, orig_x = disk(orig_center, r/ps / 2, shape=data.shape)
+        orig_mask = np.zeros_like(data, dtype=np.uint8)
+        orig_mask[orig_y, orig_x] = 1
+
+        result_mask = np.zeros_like(data, dtype=np.uint8)
+        if np.max(output) > threshold:
+            result_mask[orig_y, orig_x] = 1
+
+
+
+        values, edges = np.histogram(output, bins=50)
+
+        hist_data[r] = {"values":values, "edges":edges, "threshold":threshold, "center":orig_center}
+        if return_results is None:
+            if np.abs(distance) > 0 and np.abs(distance) < r / 2:
+                orig_y, orig_x = disk(orig_center, np.abs(distance)/ps, shape=data.shape)
+                if distance > 0:
+                    result_mask[orig_y, orig_x] = 0
+                else:
+                    result_mask = np.zeros_like(result_mask)
+                    result_mask[orig_y, orig_x] = 1
+            return_results = {"mask":result_mask, "max":np.max(output), "r":r}
+            
+            result_output = output
+            result_new_data = new_data
+        else:
+            if np.max(output) > return_results["max"]:
+                if np.abs(distance) > 0 and np.abs(distance) < r / 2:
+                    orig_y, orig_x = disk(orig_center, np.abs(distance)/ps, shape=data.shape)
+                    if distance > 0:
+                        result_mask[orig_y, orig_x] = 0
+                    else:
+                        result_mask = np.zeros_like(result_mask)
+                        result_mask[orig_y, orig_x] = 1
+                return_results = {"mask":result_mask, "max":np.max(output), "r":r}
+                result_output = output
+                result_new_data = new_data
+
+
+    if return_ring_width > 0:
+        result_mask = np.ones_like(data, dtype=np.uint8)
+        r = return_results["r"]
+        center = hist_data[r]["center"]
+        orig_y, orig_x = disk(center, (r + return_ring_width/2)/ps/2, shape=data.shape)
+        result_mask[orig_y, orig_x] = 0
+        orig_y, orig_x = disk(center, (r - return_ring_width/2)/ps/2, shape=data.shape)
+        result_mask[orig_y, orig_x] = 1
+        return_results["mask"] = result_mask
+
+    # print(f"Rest took {(datetime.now() - now).total_seconds()}s")
+    now = datetime.now()
+    if return_hist_data:
+        return return_results["mask"], hist_data, return_results["r"], result_output, result_new_data
+    
+    
+    return return_results["mask"]
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+def find_grid_hole_per_file_old(current_file, to_size=100, diameter=[12000], threshold=0.005, coverage_percentage=0.5, outside_percentage=1, outside_coverage_percentage=0.05,
+                             detect_ring=True, ring_width=1000, return_hist_data=False, pixel_size=None, wobble=0, high_pass=1500,crop=50, distance=0, return_ring_width=0, **kwargs):
+    from datetime import datetime
+    now = datetime.now()
+
     return_results = None
     hist_data = {}
     current_file = Path(current_file)
@@ -330,14 +382,21 @@ def find_grid_hole_per_file(current_file, to_size=100, diameter=[12000], thresho
 
         
         if np.isclose(high_pass, 0):
-            cut_off = 0
+            pass
+            
+            
         else:
             sig = int(high_pass / to_size)
             sig += (sig + 1) % 2
-            filtered = gaussian_filter(new_data,0,to_size) - gaussian_filter(new_data,sig,to_size)
+            new_data = gaussian_filter(new_data,0,to_size) - gaussian_filter(new_data,sig,to_size)
 
-            cut_off = 5
-            new_data = filtered[cut_off:-cut_off,cut_off:-cut_off]
+        if crop > 0:
+            cut_off = max(1, int(crop * ratio))
+            new_data = new_data[cut_off:-cut_off, cut_off:-cut_off]
+        else:
+            cut_off = 0
+        
+        
         low = int(- radius *outside_percentage)
         high_0 = int(new_data.shape[0] + radius * outside_percentage)
         high_1 = int(new_data.shape[1] + radius * outside_percentage)
@@ -345,6 +404,14 @@ def find_grid_hole_per_file(current_file, to_size=100, diameter=[12000], thresho
         pixels = new_data.size
         min_length = pixels * coverage_percentage
         outside_min_length = pixels * outside_coverage_percentage
+
+        print(f"Prepare took: {(datetime.now() - now).total_seconds()}s")
+        now = datetime.now()
+        test_new_stuff(new_data, radius, ps)
+        print(f"New mthod took: {(datetime.now() - now).total_seconds()}s")
+        now = datetime.now()
+        now = datetime.now()
+        
         for i in range(low, high_0):
             for j in range(low, high_1):
                 current_y = y + i
@@ -387,14 +454,19 @@ def find_grid_hole_per_file(current_file, to_size=100, diameter=[12000], thresho
                        
                     outside = np.nanmean(outside_values)
                     inside = np.nanmean(inside_values)
+                    # outside = np.nanmedian(outside_values)
+                    # inside = np.nanmedian(inside_values)
                     if detect_ring:
                         output[i + int(radius * outside_percentage),j + int(radius * outside_percentage)] = outside - inside
 
                     else:
                         output[i + int(radius * outside_percentage),j + int(radius * outside_percentage)] = inside - outside
 
-        
-        
+        # try:
+        #     plt.imsave(f"/Data/erc-3/schoennen/carbon_edge_detector/output/test.png", output)
+        # except:
+        #     pass
+
         circle_center = np.unravel_index(np.argmax(output), output.shape)
         
 
@@ -475,6 +547,8 @@ def find_grid_hole_per_file(current_file, to_size=100, diameter=[12000], thresho
                         else:
                             outside = np.nanmean(outside_values)
                             inside = np.nanmean(inside_values)
+                            # outside = np.nanmedian(outside_values)
+                            # inside = np.nanmedian(inside_values)
                         
                             if detect_ring:
                                 wobble_result = outside - inside
@@ -508,7 +582,6 @@ def find_grid_hole_per_file(current_file, to_size=100, diameter=[12000], thresho
         # mask[current_y, current_x] = 1
         
 
-
         orig_center = ( np.array(circle_center) + cut_off + low ) / (ps/to_size)
         orig_y, orig_x = disk(orig_center, r/ps / 2, shape=data.shape)
         orig_mask = np.zeros_like(data, dtype=np.uint8)
@@ -518,7 +591,7 @@ def find_grid_hole_per_file(current_file, to_size=100, diameter=[12000], thresho
         if np.max(output) > threshold:
             result_mask[orig_y, orig_x] = 1
 
-        fig, ax = plt.subplots(1,7,figsize=(20,5))
+        # fig, ax = plt.subplots(1,7,figsize=(20,5))
         # res = [orig_mask,result_mask, output, new_data, filtered, mask]
         # for i in range(6):
         #     ax[i].imshow(res[i], cmap="gray")
@@ -532,12 +605,47 @@ def find_grid_hole_per_file(current_file, to_size=100, diameter=[12000], thresho
 
         hist_data[r] = {"values":values, "edges":edges, "threshold":threshold, "center":orig_center}
         if return_results is None:
-            return_results = {"mask":result_mask, "max":np.max(output),"r":r}
+            if np.abs(distance) > 0 and np.abs(distance) < r / 2:
+                orig_y, orig_x = disk(orig_center, np.abs(distance)/ps, shape=data.shape)
+                if distance > 0:
+                    result_mask[orig_y, orig_x] = 0
+                else:
+                    result_mask = np.zeros_like(result_mask)
+                    result_mask[orig_y, orig_x] = 1
+            return_results = {"mask":result_mask, "max":np.max(output), "r":r}
+            
+            result_output = output
+            result_new_data = new_data
         else:
             if np.max(output) > return_results["max"]:
-                return_results[current_file] = {"mask":result_mask, "max":np.max(output), "r":r}
+                if np.abs(distance) > 0 and np.abs(distance) < r / 2:
+                    orig_y, orig_x = disk(orig_center, np.abs(distance)/ps, shape=data.shape)
+                    if distance > 0:
+                        result_mask[orig_y, orig_x] = 0
+                    else:
+                        result_mask = np.zeros_like(result_mask)
+                        result_mask[orig_y, orig_x] = 1
+                return_results = {"mask":result_mask, "max":np.max(output), "r":r}
+                result_output = output
+                result_new_data = new_data
+
+
+    if return_ring_width > 0:
+        result_mask = np.ones_like(data, dtype=np.uint8)
+        r = return_results["r"]
+        center = hist_data[r]["center"]
+        orig_y, orig_x = disk(center, (r + return_ring_width/2)/ps/2, shape=data.shape)
+        result_mask[orig_y, orig_x] = 0
+        orig_y, orig_x = disk(center, (r - return_ring_width/2)/ps/2, shape=data.shape)
+        result_mask[orig_y, orig_x] = 1
+        return_results["mask"] = result_mask
+
+    print(f"Old method took: {(datetime.now() - now).total_seconds()}s")
+    now = datetime.now()
     if return_hist_data:
-        return return_results["mask"], hist_data, return_results["r"]
+        return return_results["mask"], hist_data, return_results["r"], result_output, result_new_data
+    
+    
     return return_results["mask"]
 
 
@@ -643,6 +751,8 @@ def find_grid_hole(to_size=100, diameter=[12000], threshold=0.005, files=[], cov
                         
                             outside = np.nanmean(outside_values)
                             inside = np.nanmean(inside_values)
+                            # outside = np.nanmedian(outside_values)
+                            # inside = np.nanmedian(inside_values)
                             
                             if detect_ring:
                                 output[i + int(radius * outside_percentage),j + int(radius * outside_percentage)] = outside - inside

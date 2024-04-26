@@ -27,7 +27,8 @@ REQUIRED = [
     "matplotlib>=3.2.2",
     "scikit-image>=0.19.2",
     "pyqt5==5.15.9",
-    "qimage2ndarray==1.9.0"
+    "qimage2ndarray==1.9.0",
+    "cryosparc-tools"
 ]
 
 # What packages are optional?

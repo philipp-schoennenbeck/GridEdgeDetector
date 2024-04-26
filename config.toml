@@ -1,0 +1,49 @@
+title = "Grid edge detector configs"
+
+[command_line_arguments]
+input_files = ""
+pixel_size = 1
+recursive = false
+
+[parameters]
+threshold = 0.005
+gridsizes = [ 1.2,]
+njobs = 1
+to_size = 100
+outside_circle_coverage = 0.05
+inner_circle_coverage = 0.2
+detect_ring = true
+ring_width = 0.02
+wobble = 0
+edge_distance = 0
+high_pass_filter = 0
+crop = 0
+return_ring_width = 0
+
+[files]
+filedir = "/Users/schoennen"
+mask_file_suffix = "_mask"
+masked_image_file_suffix = "_masked"
+cryosparc_projects_dir = ""
+mask_file_type = ".mrc"
+masked_file_type = ".mrc"
+
+[misc]
+colorblind_mode = false
+
+[command_line_arguments.cryosparc]
+run = false
+job_path = ""
+
+[command_line_arguments.relion]
+run = true
+picking_path = "/Data/erc-3/schoennen/Relion_projects/AutoPick/job028/autopick.star"
+
+[command_line_arguments.mask]
+save = true
+output_dir = "/Users/schoennen"
+
+[command_line_arguments.masked]
+save = false
+output_dir = "/Users/schoennen"
+type = "mean"
