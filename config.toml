@@ -36,11 +36,11 @@ run = false
 job_path = ""
 
 [command_line_arguments.relion]
-run = true
-picking_path = "/Data/erc-3/schoennen/Relion_projects/AutoPick/job028/autopick.star"
+run = false
+picking_path = ""
 
 [command_line_arguments.mask]
-save = true
+save = false
 output_dir = "/Users/schoennen"
 
 [command_line_arguments.masked]
