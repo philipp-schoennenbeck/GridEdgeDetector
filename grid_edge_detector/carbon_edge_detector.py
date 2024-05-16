@@ -462,10 +462,7 @@ def find_grid_hole_per_file_old(current_file, to_size=100, diameter=[12000], thr
                     else:
                         output[i + int(radius * outside_percentage),j + int(radius * outside_percentage)] = inside - outside
 
-        # try:
-        #     plt.imsave(f"/Data/erc-3/schoennen/carbon_edge_detector/output/test.png", output)
-        # except:
-        #     pass
+
 
         circle_center = np.unravel_index(np.argmax(output), output.shape)
         
@@ -518,9 +515,7 @@ def find_grid_hole_per_file_old(current_file, to_size=100, diameter=[12000], thr
                         outside_values = np.delete(new_data.flatten(), idxs)
                         inside_values = new_data[current_y, current_x]
 
-                        # test_img = np.ones_like(new_data) * np.max(new_data)
-                        # test_img[current_y, current_x] = new_data[current_y, current_x] 
-                        # plt.imsave(f"/Data/erc-3/schoennen/tests/test_precision_of_grid_edge_detection/{Path(current_file).stem}_{wobble_r}_{y_alter}_{x_alter}.png", test_img, cmap="gray")
+
 
                         if detect_ring:
                             current_y = circle_y
@@ -591,14 +586,6 @@ def find_grid_hole_per_file_old(current_file, to_size=100, diameter=[12000], thr
         if np.max(output) > threshold:
             result_mask[orig_y, orig_x] = 1
 
-        # fig, ax = plt.subplots(1,7,figsize=(20,5))
-        # res = [orig_mask,result_mask, output, new_data, filtered, mask]
-        # for i in range(6):
-        #     ax[i].imshow(res[i], cmap="gray")
-        # ax[6].hist(res[2].flatten(), 255)
-        # plt.title(r)
-        # plt.savefig(f"/Data/erc-3/schoennen/carbon_edge_detector/output/{current_file.stem }.png")  
-        # plt.close()
 
 
         values, edges = np.histogram(output, bins=50)
