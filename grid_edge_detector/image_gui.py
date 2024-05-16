@@ -3,7 +3,7 @@ import sys, os
 from collections import namedtuple
 from PyQt5 import QtCore
 try:
-    from matk.gui import starting_menu
+    from cryovia.gui import starting_menu
 except:
     pass
 from matplotlib import pyplot as plt
@@ -214,7 +214,7 @@ class NonMrcFilesPixelSizeWidget(QDialog):
 
 
 def applyMask(analyserPath, mask, index):
-    from matk.matk_analysis.analyser import AnalyserWrapper, Analyser
+    from cryovia.cryovia_analysis.analyser import AnalyserWrapper, Analyser
     analyser = Analyser.load(analyserPath, index=index)
     analyser.applyMask(mask)
     analyser.save()
@@ -1907,18 +1907,18 @@ class MainWindow(QMainWindow):
         self.exportMenuBar = QMenu("Export", self.filesMenu)
         self.filesMenu.addMenu(self.exportMenuBar)
         try:
-            from matk.gui.dataset import Dataset, get_all_dataset_names
+            from cryovia.gui.dataset import Dataset, get_all_dataset_names
 
-            self.importDatasetMenu = self.importMenuBar.addMenu("MATK dataset")
-            self.exportDatasetMenu = self.exportMenuBar.addMenu("MATK dataset")
+            self.importDatasetMenu = self.importMenuBar.addMenu("CryoVIA dataset")
+            self.exportDatasetMenu = self.exportMenuBar.addMenu("CryoVIA dataset")
             self.exportDatasetMenu.aboutToShow.connect(self.openedExportDataset)
             self.importDatasetMenu.aboutToShow.connect(self.openedImportDataset)
             # self.exportDatasetMenu.hovered.connect(self.openedExportDataset)
             
 
         except Exception as e:
-            self.importDataset = self.importMenuBar.addMenu("MATK dataset")
-            self.exportDatasetMenu = self.exportMenuBar.addMenu("MATK dataset")
+            self.importDataset = self.importMenuBar.addMenu("CryoVia dataset")
+            self.exportDatasetMenu = self.exportMenuBar.addMenu("CryoVia dataset")
             self.importDataset.setEnabled(False)
             self.exportDatasetMenu.setEnabled(False)
         
@@ -2131,7 +2131,7 @@ class MainWindow(QMainWindow):
                 
 
     def openedImportDataset(self):
-        from matk.gui.dataset import Dataset, get_all_dataset_names
+        from cryovia.gui.dataset import Dataset, get_all_dataset_names
         self.importDatasetMenu.clear()
         names = sorted(list(get_all_dataset_names()))
         for name in names:
@@ -2222,8 +2222,8 @@ class MainWindow(QMainWindow):
                 CURRENTCOUNTER += 1
                 self.mainwidget.setProgress(CURRENTCOUNTER/maxNumber * 100, True)
             return callback
-        from matk.gui.dataset import Dataset
-        from matk.matk_analysis.analyser import Analyser, AnalyserWrapper
+        from cryovia.gui.dataset import Dataset
+        from cryovia.cryovia_analysis.analyser import Analyser, AnalyserWrapper
         global MAX_CORES
         dataset:Dataset = Dataset.load(dataset)
         number_of_files = 0
@@ -2256,7 +2256,7 @@ class MainWindow(QMainWindow):
 
     def loadDataset(self, name):
         global DISABLE_FUNCTION
-        from matk.gui.dataset import Dataset
+        from cryovia.gui.dataset import Dataset
         dataset:Dataset = Dataset.load(name)
         files = dataset.micrograph_paths
         if len(files) > 0:
