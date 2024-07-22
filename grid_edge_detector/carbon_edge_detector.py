@@ -160,6 +160,22 @@ def find_grid_hole_per_file(current_file, to_size=100, diameter=[12000], thresho
     from datetime import datetime
     now = datetime.now()
 
+
+    if "gridsizes" in kwargs:
+        diameter = kwargs["gridsizes"]
+    if "outside_circle_coverage" in kwargs:
+        outside_coverage_percentage = kwargs["outside_circle_coverage"]
+    if "inner_circle_coverage" in kwargs:
+        coverage_percentage = kwargs["inner_circle_coverage"]
+    if "edge_distance" in kwargs:
+        distance = kwargs["edge_distance"]
+    if "high_pass_filter" in kwargs:
+        high_pass = kwargs["high_pass_filter"]
+    if pixel_size == 0:
+        pixel_size = None
+
+
+
     return_results = None
     hist_data = {}
     current_file = Path(current_file)
@@ -257,6 +273,8 @@ def find_grid_hole_per_file(current_file, to_size=100, diameter=[12000], thresho
         result_mask = np.zeros_like(data, dtype=np.uint8)
         if np.max(output) > threshold:
             result_mask[orig_y, orig_x] = 1
+        else:
+            result_mask = np.ones_like(data, dtype=np.uint8)
 
 
 
@@ -264,19 +282,7 @@ def find_grid_hole_per_file(current_file, to_size=100, diameter=[12000], thresho
 
         hist_data[r] = {"values":values, "edges":edges, "threshold":threshold, "center":orig_center}
         if return_results is None:
-            if np.abs(distance) > 0 and np.abs(distance) < r / 2:
-                orig_y, orig_x = disk(orig_center, np.abs(distance)/ps, shape=data.shape)
-                if distance > 0:
-                    result_mask[orig_y, orig_x] = 0
-                else:
-                    result_mask = np.zeros_like(result_mask)
-                    result_mask[orig_y, orig_x] = 1
-            return_results = {"mask":result_mask, "max":np.max(output), "r":r}
-            
-            result_output = output
-            result_new_data = new_data
-        else:
-            if np.max(output) > return_results["max"]:
+            if np.max(output) > threshold:
                 if np.abs(distance) > 0 and np.abs(distance) < r / 2:
                     orig_y, orig_x = disk(orig_center, np.abs(distance)/ps, shape=data.shape)
                     if distance > 0:
@@ -284,6 +290,20 @@ def find_grid_hole_per_file(current_file, to_size=100, diameter=[12000], thresho
                     else:
                         result_mask = np.zeros_like(result_mask)
                         result_mask[orig_y, orig_x] = 1
+            return_results = {"mask":result_mask, "max":np.max(output), "r":r}
+            
+            result_output = output
+            result_new_data = new_data
+        else:
+            if np.max(output) > return_results["max"]:
+                if np.max(output) > threshold:
+                    if np.abs(distance) > 0 and np.abs(distance) < r / 2:
+                        orig_y, orig_x = disk(orig_center, np.abs(distance)/ps, shape=data.shape)
+                        if distance > 0:
+                            result_mask[orig_y, orig_x] = 0
+                        else:
+                            result_mask = np.zeros_like(result_mask)
+                            result_mask[orig_y, orig_x] = 1
                 return_results = {"mask":result_mask, "max":np.max(output), "r":r}
                 result_output = output
                 result_new_data = new_data

@@ -216,9 +216,10 @@ def get_files(config):
     return return_files
 
 
-def run_masking(file, configs):
+def run_masking(file, configs, return_for_csv=False):
     file = Path(file)
-    mask = find_grid_hole_per_file(file, **configs["parameters"])
+    mask = find_grid_hole_per_file(file, **configs["parameters"], pixel_size=configs["command_line_arguments"]["pixel_size"])
+    data = None
     if configs["command_line_arguments"]["masked"]["save"]:
         output_dir = Path(configs["command_line_arguments"]["masked"]["output_dir"])
         data, ps = load_file(file)
@@ -265,6 +266,22 @@ def run_masking(file, configs):
         else:
             output_path = output_dir / (file.stem + configs["files"]["mask_file_suffix"] + configs["files"]["mask_file_type"])
             plt.imsave(output_path, mask, cmap="gray")
+
+
+    if return_for_csv:
+        if data is None:
+            data, ps = load_file(file)
+        mean = np.mean(data)
+        median = np.median(data)
+        fn = file
+        found_edge = np.any(mask == 1)
+        if not found_edge:
+            percentage = 0
+        else:
+            percentage = np.sum(mask == 0) / np.array(mask).size
+        return fn, found_edge, percentage, mean, median
+    
+       
     return mask
 
 @run_ged.command()
@@ -292,23 +309,32 @@ def CLI(config):
         if len(default_configs["command_line_arguments"]["input_files"]) == 0:
             print("Parameter \"input_files\" should be a directory or files (simple wildcards possible).")
             exit()
-        if not default_configs["command_line_arguments"]["masked"]["save"] and not default_configs["command_line_arguments"]["mask"]["save"]:
-            print("Either mask or masked should be saved when not running cryosparc jobs. Otherwise no output will be available.")
+        if not default_configs["command_line_arguments"]["masked"]["save"] and not default_configs["command_line_arguments"]["mask"]["save"] and not default_configs["command_line_arguments"]["csv"]["save"]:
+            print("Either mask, masked or csv should be saved when not running cryosparc/relion jobs. Otherwise no output will be available.")
             exit()
     
         files = get_files(default_configs)
 
+        csv_results = []
         if default_configs["parameters"]["njobs"] <= 1:
             for file in tqdm.tqdm(files) :
-                run_masking(file, default_configs)
+                csv_results.append(run_masking(file, default_configs, True))
         else:
             with mp.get_context("spawn").Pool(default_configs["parameters"]["njobs"]) as pool:
-                results = [pool.apply_async(run_masking, args=[file, default_configs]) for file in files]
-                result = []
+                results = [pool.apply_async(run_masking, args=[file, default_configs, True]) for file in files]
+                # result = []
                 for res in tqdm.tqdm(results):
-                    result.append(res.get())
+                    csv_results.append(res.get())
                 # result = [res.get() for res in result]
-            
+        if default_configs["command_line_arguments"]["csv"]["save"]:
+            output_file = Path(default_configs["command_line_arguments"]["csv"]["output_file"])
+            with open(output_file, "w") as f:
+                f.write("file\tfound_edge\tpercentage_of_image_is_carbon\tmean\tmedian\n")
+                argsorted_idx = np.argsort(np.array(csv_results)[...,2])
+                for idx in argsorted_idx:
+                    # f.write(f"{csv_results[idx][0]}\t{csv_results[idx][1]}\t{csv_results[idx][2]}\n")
+                    f.write("\t".join([str(i) for i in csv_results[idx]]))
+                    f.write("\n")
 
 
 

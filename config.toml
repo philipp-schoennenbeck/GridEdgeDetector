@@ -1,18 +1,18 @@
 title = "Grid edge detector configs"
 
 [command_line_arguments]
-input_files = ""
-pixel_size = 1
+input_files = "/Data/erc-3/akazmi/240710_Arctica_SCOD2/*.mrc"
+pixel_size = 0
 recursive = false
 
 [parameters]
-threshold = 0.005
+threshold = 0.06
 gridsizes = [ 1.2,]
-njobs = 1
+njobs = 20
 to_size = 100
 outside_circle_coverage = 0.05
-inner_circle_coverage = 0.2
-detect_ring = true
+inner_circle_coverage = 0.1
+detect_ring = false
 ring_width = 0.02
 wobble = 0
 edge_distance = 0
@@ -47,3 +47,7 @@ output_dir = "/Users/schoennen"
 save = false
 output_dir = "/Users/schoennen"
 type = "mean"
+
+[command_line_arguments.csv]
+save = true
+output_file = "/Data/erc-3/schoennen/tests/ahad_output.csv"

@@ -18,6 +18,8 @@ from PyQt5.QtGui import QImage, QPixmap, QColor, QIntValidator, QDoubleValidator
 from PyQt5.QtWidgets import QApplication, QMainWindow, QTableView, QStyledItemDelegate, QWidget, QHBoxLayout, QVBoxLayout, QProgressBar, QPushButton, QGridLayout, QLabel, QLineEdit, QSizePolicy
 from PyQt5.QtWidgets import QMenuBar, QMenu, QFileDialog, QFrame, QTabWidget, QPlainTextEdit, QComboBox, QCheckBox, QShortcut, QTextEdit, QMessageBox, QDialog, QDialogButtonBox, QSpinBox
 from pathlib import Path
+from skimage.filters import threshold_otsu, threshold_minimum
+
 from PIL import Image
 import multiprocessing as mp
 import mrcfile
@@ -96,7 +98,7 @@ COLORS_ALTERNATIVE = {"not yet":"red", "nothing found":"orange", "mask found":"l
 
 
 class mask_file:
-    def __init__(self, shape, center, gridsize, distance, ring_width, inverse, path, pixelsize) -> None:
+    def __init__(self, shape, center, gridsize, distance, ring_width, inverse, path, pixelsize, edge_found, has_ice) -> None:
         self.shape = shape
         self.center = center
         self.gridsize = gridsize
@@ -105,9 +107,15 @@ class mask_file:
         self.inverse = inverse
         self.path = path
         self.pixelsize = pixelsize
+        self.edge_found = edge_found
+        self.has_ice = has_ice
     
     def create_mask(self):
         
+        if not self.edge_found:
+            if self.has_ice:
+                return np.ones(self.shape)
+            return np.zeros(self.shape)
         if self.ring_width > 0:
             mask = np.ones(self.shape)
             orig_y, orig_x = disk(self.center, (self.gridsize + self.ring_width/2)/self.pixelsize/2, shape=self.shape)
@@ -167,7 +175,6 @@ def findPickingJobs(project):
         TIMER["exists"] += (datetime.now() - now).total_seconds()
         now = datetime.now()
         
-        # print(os.path.exists(str(picked_micrograph_path)))
         TIMER["exists_os"] += (datetime.now() - now).total_seconds()
         now = datetime.now()
         
@@ -340,10 +347,8 @@ class Worker(QObject):
             
         now = datetime.now()
         with mp.get_context("spawn").Pool(self.parameters["njobs"]) as pool:
-            print(f"Creating pool took {(datetime.now() - now).total_seconds()}s")
             now = datetime.now()
             result = [pool.apply_async(run_parallel, [idx, data.fn, data.metadata, self.parameters ], callback=callback) for idx, data in zip(self.indexes, self.image_datas)]
-            print(f"Starting pool took {(datetime.now() - now).total_seconds()}s")
             [res.get() for res in result]
 
         pool.join()
@@ -402,6 +407,8 @@ class image_data:
         self.fn = Path(fn)
         self.cryosparc_info = cryosparc_info
         self.rlnInfo = rlnInfo
+        self.mean_ = None
+        self.median_ = None
         if dataset is None:
             self.dataset = None
         else:
@@ -409,6 +416,8 @@ class image_data:
         if self.fn.suffix in [".mrc", ".MRC", ".rec", ".REC"]:
             with mrcfile.open(self.fn,permissive=True) as f:
                 data = f.data * 1
+                self.mean_ = np.mean(data)
+                self.median_ = np.median(data)
                 self.metadata["Dimensions"] = data.shape
                 middle = np.median(data)
                 std = np.std(data)
@@ -428,7 +437,8 @@ class image_data:
             self.metadata["Dimensions"] = img.size[::-1]
             img.thumbnail((200,200))
             data = np.array(img)
-            
+            self.mean_ = np.mean(data)
+            self.median_ = np.median(data)
             self.metadata["Pixel spacing"] = 1
             middle = np.median(data)
             std = np.std(data)
@@ -465,6 +475,30 @@ class image_data:
         self.found_edge = False
         self.thresholdImage = None
         self.usedImage = None
+
+
+    @property
+    def mean(self):
+
+        if self.mean_ is None:
+            self.mean_ = np.mean(self.original_image)
+        return self.mean_
+    
+    @property
+    def median(self):
+        if self.median_ is None:
+            self.median_ = np.median(self.original_image)
+        return self.median_
+
+
+    @property
+    def percentage(self):
+        if self.original_mask is None:
+            return np.nan
+        else:
+            return np.sum(self.original_mask == 0) / self.original_mask.size
+        
+
 
 
     @property
@@ -512,6 +546,7 @@ class image_data:
     
     @original_mask.setter
     def original_mask(self, value):
+        self.mask = q2n.array2qimage(value, True)
         self.changed = True
         
         self.original_mask_ = value
@@ -862,6 +897,124 @@ class ImageViewer(QWidget):
 
 
 
+class carbonIceDecider(QWidget):
+
+
+    def __init__(self, parent, means) -> None:
+        super().__init__()
+        self.customParent = parent
+        self.setLayout(QVBoxLayout())
+        self.carbonLabel = QLabel("Carbon", alignment=Qt.AlignLeft)
+        self.iceLabel = QLabel("Ice", alignment=Qt.AlignRight)
+        self.labelLayout = QHBoxLayout()
+        self.labelLayout.addWidget(self.carbonLabel)
+        self.labelLayout.addWidget(self.iceLabel)
+        self.line = None
+        self.edges = None
+        self.values = None
+
+        self.thresholdText = QLineEdit(self)
+        self.thresholdText.editingFinished.connect(self.updateLine)
+        self.thresholdText.setValidator(QDoubleValidator())
+        self.thresholdLabel = QLabel("Threshold")
+        self.thresholdPredictButton = QPushButton("Predict Threshold")
+        self.thresholdPredictButton.clicked.connect(self.predictThreshold)
+
+        self.thresholdLayout = QHBoxLayout()
+        self.thresholdLayout.addWidget(self.thresholdLabel, alignment=Qt.AlignLeft)
+        self.thresholdLayout.addWidget(self.thresholdText, alignment=Qt.AlignLeft)
+        self.thresholdLayout.addWidget(self.thresholdPredictButton, alignment=Qt.AlignLeft)
+
+        self.applyLayout = QHBoxLayout()
+        self.applyButton = QPushButton("Apply")
+        self.okButton = QPushButton("OK")
+        self.cancelButton = QPushButton("Close")
+        self.applyButton.clicked.connect(lambda :self.apply("apply"))
+        self.okButton.clicked.connect(lambda : self.apply("ok"))
+        self.cancelButton.clicked.connect(lambda :self.apply("close"))
+
+        self.applyLayout.addWidget(self.applyButton)
+        
+        self.applyLayout.addWidget(self.okButton)
+        self.applyLayout.addWidget(self.cancelButton)
+
+
+        self.plotWidget = PlotWidget(self, "white")
+        self.plotWidget.setMouseEnabled(False, False)
+
+        self.layout().addLayout(self.labelLayout)
+        self.layout().addWidget(self.plotWidget)
+        self.layout().addLayout(self.thresholdLayout)
+        self.layout().addLayout(self.applyLayout)
+
+
+        
+        self.updatePlot(means)
+        
+
+    def apply(self, s):
+        
+        
+        if s == "ok" or s == "apply":
+            self.customParent.applyThreshold(self.line.getPos()[0])
+        if s == "close" or s == "ok":
+            self.close()
+            
+
+    
+    def updatePlot(self, means):
+
+        hist = self.plotWidget
+        hist.clear()
+
+        
+
+        values, edges = np.histogram(means, 20)
+        self.values = values
+        self.edges = edges
+
+
+
+        self.bargraph = pg.BarGraphItem(x0=edges[:-1], x1=edges[1:], height=values)
+        
+        self.line = pg.InfiniteLine(0,pen="red", movable=True)
+        self.plotWidget.addItem(self.bargraph)
+        self.plotWidget.addItem(self.line)
+        self.line.sigPositionChangeFinished.connect(self.updateThresholdLabel)
+        self.predictThreshold()
+        
+
+
+    def setXrange(self, threshold):
+        self.plotWidget.setXRange(np.min([np.min(self.edges), threshold]), np.max([np.max(self.edges), threshold]))
+
+    def updateThresholdLabel(self):
+        newThreshold = self.line.getPos()[0]
+        self.thresholdText.setText(str(newThreshold))
+        self.setXrange(newThreshold)
+
+    def updateLine(self, newThreshold=None):
+        if newThreshold is None:
+            newThreshold = float(self.thresholdText.text())
+        self.line.setPos(newThreshold)
+        self.setXrange(newThreshold)
+    
+    def predictThreshold(self):
+
+        middle_edges = [np.mean([self.edges[i], self.edges[i+1]]) for i in range(len(self.edges)-1)]
+        try:
+            newThreshold = threshold_minimum(hist=(self.values, middle_edges))
+        except Exception as e:
+
+            newThreshold = np.median(self.edges)
+        self.updateLine(newThreshold)
+        self.updateThresholdLabel()
+    
+
+    def sizeHint(self):
+        # All items the same size.
+        return QSize(600, 500)
+
 
 
 
@@ -1208,6 +1361,7 @@ class runWidget(QFrame):
         global CURRENT_CONFIG, MAX_CORES
         super().__init__(parent)
         self.setLayout(QGridLayout())
+        self.deciderWindow = None
 
         # self.setStyleSheet("border: 1px solid black")
         # self.setFrameStyle(QFrame.StyledPanel | QFrame.Plain)
@@ -1221,7 +1375,8 @@ class runWidget(QFrame):
         # self.thresholdLineEdit = QLineEdit(str(CURRENT_CONFIG["parameters"]["threshold"]))
         # self.thresholdLineEdit.setValidator(QDoubleValidator())
         self.runAllButton = QPushButton(text="Mask all")
-        self.runnSelectedButton = QPushButton(text="Mask selected")
+        self.runSelectedButton = QPushButton(text="Mask selected")
+        self.iceOrCarbonButton = QPushButton("Ice or carbon")
 
         # self.njobsLineEdit.setValidator(CorrectIntValidator(1, MAX_CORES,))
         
@@ -1231,7 +1386,7 @@ class runWidget(QFrame):
         # self.key_names = [("to_size","Resize to [Å/px]", float, 1,None), ("outside_circle_coverage", "Outside of circle coverage", float,0,1), ("inner_circle_coverage", "Inside of circle coverage", float, 0,1),
         #                    ("detect_ring", "Detect ring", bool,None, None), ("ring_width", "Ring width", float, 0.001, None), ("njobs", "# CPUs to use", int, 1, MAX_CORES),("wobble", "Wobble", float, 0, 0.2),
         #                    ("high_pass_filter", "High pass sigma", int, 0, None), ("crop", "Crop [Å]", int, 0, None), ]
-        self.key_names = [("to_size","Resize to [Å/px]", float, 1,None), ("detect_ring", "Detect ring", bool,None, None), ("ring_width", "Ring width [Å]", float, 0.001, None), ("njobs", "# CPUs to use", int, 1, MAX_CORES),("wobble", "Wobble [%]", float, 0, 0.2),
+        self.key_names = [("to_size","Resize to [Å/px]", float, 1,None), ("detect_ring", "Detect ring", bool,None, None), ("ring_width", "Ring width [µm]", float, 0.001, None), ("njobs", "# CPUs to use", int, 1, MAX_CORES),("wobble", "Wobble [%]", float, 0, 0.2),
                            ("crop", "Crop [Å]", int, 0, None), ]
         tooltips = {
             "to_size": "Resize the image to this pixel spacing before convolution for faster processing.",
@@ -1280,15 +1435,30 @@ class runWidget(QFrame):
 
         
         self.runAllButton.clicked.connect(self.runAll)
-        self.runnSelectedButton.clicked.connect(self.runSelected)
+        self.runSelectedButton.clicked.connect(self.runSelected)
+        self.iceOrCarbonButton.clicked.connect(self.iceOrCarbon)
         self.number_of_images = 1
         self.current_number_of_images = 0
         # self.layout().addWidget(self.njobsLabel, 1,0)
         # self.layout().addWidget(self.njobsLineEdit, 1,1)
     
         self.layout().addWidget(self.runAllButton,counter+1,0)
-        self.layout().addWidget(self.runnSelectedButton,counter+1,1)
+        self.layout().addWidget(self.runSelectedButton,counter+1,1)
+        self.layout().addWidget(self.iceOrCarbonButton, counter +1 , 2)
 
+
+    def applyThreshold(self, threshold):
+        image_datas = self.parent().parent().imageviewer.model.previews
+        for id_ in image_datas:
+            if not id_.found_edge:
+                if id_.original_mask is None:
+                    id_.original_mask = np.ones(id_.metadata["Dimensions"])
+                if id_.mean < threshold:
+                    id_.original_mask.fill(0)
+                else:
+                    id_.original_mask.fill(1)
+                print(id_.mean, threshold)
+        self.parent().parent().imageviewer.model.layoutChanged.emit()
 
     def runAll(self):
         if not self.currentlyRunning:
@@ -1304,6 +1474,32 @@ class runWidget(QFrame):
             image_datas = self.parent().parent().imageviewer.model.previews
             self.runIndexes(indexes, image_datas)
             
+
+
+
+    def iceOrCarbon(self):
+        if not self.currentlyRunning:
+            global DISABLE_FUNCTION
+            DISABLE_FUNCTION(True)   
+
+              
+
+            image_datas = self.parent().parent().imageviewer.model.previews
+            means = []
+            medians = []
+            for id_ in image_datas:
+                if not id_.found_edge:
+                    means.append(id_.mean)
+                    medians.append(id_.median)
+                    # if id_.median > 380:
+                    #     id_.original_mask = np.ones_like(id_.original_mask)
+            if len(means) > 1:
+                self.deciderWindow = carbonIceDecider(self, means)
+                self.deciderWindow.show()         
+            DISABLE_FUNCTION(False)
+
+
+
             
     
     def runIndexes(self, indexes, image_datas):
@@ -1960,6 +2156,11 @@ class MainWindow(QMainWindow):
 
             act = self.saveMaskedImagesMenu.addAction(name)
             act.triggered.connect(lambda state, x=method: self.saveAllMaskedImages(x))
+        self.saveSelectedCsvAction = self.filesMenu.addAction("Save CSV-file for selected images")
+        self.saveAllCsvAction = self.filesMenu.addAction("Save CSV-file for all images")
+
+        self.saveSelectedCsvAction.triggered.connect(self.saveSelectedCsv)
+        self.saveAllCsvAction.triggered.connect(self.saveAllCsv)
 
         # self.saveSelectedMaskedImagesAction.triggered.connect(self.saveSelectedMaskedImages)
         
@@ -2097,15 +2298,7 @@ class MainWindow(QMainWindow):
          
         img_data_to_use = []
         coordinate_dir = Path(job).parent
-        # counter = 0
-        # print(coordinate_dir)
-        # new_coordinate_dir = coordinate_dir.parent / (coordinate_dir.name + "_old")
-        
-        # while new_coordinate_dir.exists():
-        #     new_coordinate_dir = coordinate_dir.parent / (coordinate_dir.name + f"_old_{counter}")
-        #     counter += 1
-        # print(new_coordinate_dir)
-        # shutil.copytree(coordinate_dir, new_coordinate_dir)
+
         for img_data in self.mainwidget.imageviewer.model.previews:
             img_data:image_data
             if img_data.rlnInfo is not None:
@@ -2188,13 +2381,10 @@ class MainWindow(QMainWindow):
                 y = int(y*shape[0])
                 if masks[m][y,x] == 1:
                     idxs.append(True)
-                    # print(y,x, "Inside")
                 else:
                     idxs.append(False)
-                    # print(y,x, "Outside")
             else:
                 idxs.append(True)
-                # print(x,y, "inside")
         ds = ds.mask(idxs)
         shutil.move(job / "picked_particles.cs", job / "picked_particles_old.cs")
         ds.save(job / "picked_particles.cs")
@@ -2241,13 +2431,13 @@ class MainWindow(QMainWindow):
         for img_data in self.mainwidget.imageviewer.model.previews:
             if img_data.dataset is not None and img_data.dataset == dataset.name:
                 img_data:image_data
-                if img_data.original_mask is not None:
+                if img_data.original_mask is not None :
                     current_path_name = mask_path / (Path(img_data.fn).stem + "_mask.pickle")
                     hist_data = img_data.hist_data[img_data.best_gridsize]
                    
                         
                     mask_data = mask_file(img_data.metadata["Dimensions"], hist_data["center"], img_data.best_gridsize,img_data.metadata["distance"],img_data.metadata["return_ring_width"], 
-                                          img_data.metadata["inverse"], img_data.fn, img_data.metadata["Pixel spacing"] )
+                                          img_data.metadata["inverse"], img_data.fn, img_data.metadata["Pixel spacing"], img_data.found_edge, np.max(img_data.original_mask)==1  )
                     
                     with open(current_path_name, "wb") as f:
                         pickle.dump(mask_data, f)
@@ -2323,7 +2513,7 @@ class MainWindow(QMainWindow):
         # self.saveFilesAction.setDisabled(disable)
         # self.saveSelectedFilesAction.setDisabled(disable)
         # self.mainwidget.metadataWidget.runWidget.runAllButton.setDisabled(disable)
-        # self.mainwidget.metadataWidget.runWidget.runnSelectedButton.setDisabled(disable)
+        # self.mainwidget.metadataWidget.runWidget.runSelectedButton.setDisabled(disable)
 
     def loadFiles(self):
         global DISABLE_FUNCTION
@@ -2345,6 +2535,20 @@ class MainWindow(QMainWindow):
         image_datas = self.mainwidget.imageviewer.model.previews
         self.saveMasks(image_datas)
     
+
+    def saveAllCsv(self):
+        image_datas = self.mainwidget.imageviewer.model.previews
+        self.saveCsvFile(image_datas)
+    
+
+
+    def saveSelectedCsv(self):
+        idxs = self.mainwidget.imageviewer.view.selectionModel().selectedIndexes()
+        new_idxs = [idx.row() * self.mainwidget.imageviewer.model.columnCount() + idx.column() for idx in idxs]
+        image_datas = [self.mainwidget.imageviewer.model.previews[idx] for idx in new_idxs]
+        self.saveCsvFile(image_datas)
+
+
     def saveSelectedMasks(self):
         
         idxs = self.mainwidget.imageviewer.view.selectionModel().selectedIndexes()
@@ -2361,6 +2565,33 @@ class MainWindow(QMainWindow):
     def saveAllMaskedImages(self, method="min"):
         image_datas = self.mainwidget.imageviewer.model.previews
         self.saveMaskedImages(image_datas, method=method)
+
+
+    def saveCsvFile(self, image_datas):
+        global CURRENT_CONFIG  
+        dialog = QFileDialog()
+        
+        files = []
+        found_carbon = []
+        percentages = []
+        save_dir = dialog.getExistingDirectory(self, "Save directory", CURRENT_CONFIG["files"]["filedir"])
+        if save_dir is not None and len(save_dir) > 0:
+            with open(Path(save_dir) / "test.csv", "w") as f:
+                f.write("file\tfound_edge\tpercentage_of_image\n")
+                for id in image_datas:
+                    files.append(id.fn)
+                    if id.found_edge is None:
+                        found_carbon.append(np.nan)
+                    else:
+                        found_carbon.append(id.found_edge)
+                    percentages.append(id.percentage)
+
+
+                sorted_index = np.argsort(percentages)
+                for idx in sorted_index:
+                    f.write(f"{files[idx]}\t{found_carbon[idx]}\t{percentages[idx]}\n")
+        
+
 
     def saveMaskedImages(self, image_datas, method="min"):
         global CURRENT_CONFIG  
@@ -2609,7 +2840,8 @@ def getDisableEverythingFunction(window):
         # window.saveMaskedImagesAction.setDisabled(disable)
         # window.saveSelectedFilesAction.setDisabled(disable)
         window.mainwidget.metadataWidget.runWidget.runAllButton.setDisabled(disable)
-        window.mainwidget.metadataWidget.runWidget.runnSelectedButton.setDisabled(disable)
+        window.mainwidget.metadataWidget.runWidget.runSelectedButton.setDisabled(disable)
+        window.mainwidget.metadataWidget.runWidget.iceOrCarbonButton.setDisabled(disable)
 
 
     return disableEverything
