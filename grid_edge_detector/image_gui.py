@@ -16,7 +16,7 @@ import shutil
 import pickle
 from PyQt5.QtGui import QImage, QPixmap, QColor, QIntValidator, QDoubleValidator, QPen, QValidator, QPalette, QKeySequence, QWheelEvent
 from PyQt5.QtWidgets import QApplication, QMainWindow, QTableView, QStyledItemDelegate, QWidget, QHBoxLayout, QVBoxLayout, QProgressBar, QPushButton, QGridLayout, QLabel, QLineEdit, QSizePolicy
-from PyQt5.QtWidgets import QMenuBar, QMenu, QFileDialog, QFrame, QTabWidget, QPlainTextEdit, QComboBox, QCheckBox, QShortcut, QTextEdit, QMessageBox, QDialog, QDialogButtonBox, QSpinBox
+from PyQt5.QtWidgets import QMenuBar, QMenu, QFileDialog, QFrame, QTabWidget, QPlainTextEdit, QComboBox, QCheckBox, QShortcut, QTextEdit, QMessageBox, QDialog, QDialogButtonBox, QSpinBox, QStyle
 from pathlib import Path
 from skimage.filters import threshold_otsu, threshold_minimum
 
@@ -583,6 +583,8 @@ class PreviewDelegate(QStyledItemDelegate):
         data = index.model().data(index, Qt.DisplayRole)
         if data is None:
             return
+        if option.state & QStyle.State_Selected:
+            painter.fillRect(option.rect, option.palette.highlight())
         # painter.save()
         # width = option.rect.width() - CELL_PADDING * 2
         width = (option.rect.width() - CELL_PADDING * 2) // 2
@@ -809,6 +811,7 @@ class ImageViewer(QWidget):
         #         CURRENTCOUNTER += 1
         #         self.mainwidget.setProgress(CURRENTCOUNTER/maxNumber * 100, True)
         #     return callback
+        files = [Path(f) for f in files]
         a = self.parent().metadataWidget.runWidget
 
         njobs = int(a.configLineEdits["njobs"][0].text())
