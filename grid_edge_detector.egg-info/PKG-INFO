@@ -1,0 +1,114 @@
+Metadata-Version: 2.1
+Name: grid_edge_detector
+Version: 0.1.0
+Summary: A GUI for carbon and other grid edge detection for electron microscopy images.
+Home-page: https://github.com/Croxa/GridEdgeDetector
+Author: Philipp Schönnenbeck
+Author-email: Philipp Schönnenbeck <p.schoennenbeck@fz-juelich.de>
+Maintainer-email: Philipp Schönnenbeck <p.schoennenbeck@fz-juelich.de>
+License: MIT License
+        
+        Copyright (c) 2022 Croxa
+        
+        Permission is hereby granted, free of charge, to any person obtaining a copy
+        of this software and associated documentation files (the "Software"), to deal
+        in the Software without restriction, including without limitation the rights
+        to use, copy, modify, merge, publish, distribute, sublicense, and/or sell
+        copies of the Software, and to permit persons to whom the Software is
+        furnished to do so, subject to the following conditions:
+        
+        The above copyright notice and this permission notice shall be included in all
+        copies or substantial portions of the Software.
+        
+        THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
+        IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
+        FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE
+        AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
+        LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
+        OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
+        SOFTWARE.
+        
+Project-URL: Homepage, https://github.com/Croxa/GridEdgeDetector
+Keywords: cryoem,image-processing,edge-detection
+Classifier: Development Status :: 3 - Alpha
+Classifier: Intended Audience :: Users
+Classifier: License :: OSI Approved :: MIT License
+Classifier: Programming Language :: Python :: 3
+Classifier: Programming Language :: Python :: 3.9
+Classifier: Programming Language :: Python :: 3.10
+Classifier: Programming Language :: Python :: 3.11
+Classifier: Programming Language :: Python :: 3.12
+Classifier: Programming Language :: Python :: 3 :: Only
+Requires-Python: >=3.9
+Description-Content-Type: text/markdown
+License-File: LICENSE
+Requires-Dist: mrcfile>=1.3
+Requires-Dist: numpy>=1.19
+Requires-Dist: pandas>=1.3.5
+Requires-Dist: pyqtgraph>=0.12.4
+Requires-Dist: scipy>=1.7.3
+Requires-Dist: toml>=0.10.2
+Requires-Dist: psutil>=5.9.0
+Requires-Dist: matplotlib>=3.2.2
+Requires-Dist: scikit-image>=0.19.2
+Requires-Dist: pyqt5==5.15.9
+Requires-Dist: qimage2ndarray==1.9.0
+Requires-Dist: cryosparc-tools
+Provides-Extra: dev
+Provides-Extra: test
+
+# GridEdgeDetector
+
+## Install
+
+Clone this repository
+
+```git clone https://github.com/philipp-schoennenbeck/GridEdgeDetector```
+
+Move into repository
+```cd GridEdgeDetector```
+
+Create a new python environment using conda
+
+```conda create -n ged```
+
+Activate conda environment
+```conda activate ged```
+
+Run setup.py file
+
+```pip install -e .```
+
+Now you can start the GUI with 
+```ged```
+
+## Parameters
+
+Pixel spacing: The resolution of your image in Å/pixel. Automatically extracted when using mrc-files.
+
+Grid hole size: The diameter of your grid hole in μm. It is usually 2 or 1.2.
+
+Threshold: The value to distinguish between finding a hole and not finding a hole. Look at the graph to get a better understanding about this value for your data.
+
+Distance: How far inside the grid hole the mask should extend in Å. Positive values create a ring link mask. Negative a smaller circle than the grid hole.
+
+Return ring width: Create the mask as a ring around the grid hole with this width in Å.
+
+Outside circle coverage: How much of the image is allowed to be outside of the grid hole as a decimal value between 0-1.
+
+Inside circle coverage: How much of the image has to be inside of the grid hole as a decimal value between 0-1.
+
+High pass filter: Apply a high pass filter of this size before searching for the edge. In Å. 
+
+
+Resize to: The resolution the image is resized to to speed up the algorithm in Å/pixel.
+
+Detect ring: Whether to compare the values of a circle or a ring to every other value. A ring detection can be useful for high pass filtered images.
+
+Ring width: If Detect ring is active this is the parameter for the ring width in Å.
+
+CPUs to use: Number of CPUs to use for parallization.
+
+Wobble: A small value to find more accurate results. THe algorithm finds first the best coordinate for the circle and then changed the circle size and the coordinate by this amount to find slightly better results. 0-1
+
+Crop: The amount of Å to crop the iamge before searching for the grid edge. Sometimes image artifacts on the image edges can influence the algorithm. 
