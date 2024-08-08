@@ -2106,7 +2106,7 @@ class MainWindow(QMainWindow):
         self.exportMenuBar = QMenu("Export", self.filesMenu)
         self.filesMenu.addMenu(self.exportMenuBar)
         try:
-            from cryovia.gui.dataset import Dataset, get_all_dataset_names
+            from cryovia.cryovia_analysis.dataset import Dataset, get_all_dataset_names
 
             self.importDatasetMenu = self.importMenuBar.addMenu("CryoVIA dataset")
             self.exportDatasetMenu = self.exportMenuBar.addMenu("CryoVIA dataset")
@@ -2327,7 +2327,7 @@ class MainWindow(QMainWindow):
                 
 
     def openedImportDataset(self):
-        from cryovia.gui.dataset import Dataset, get_all_dataset_names
+        from cryovia.cryovia_analysis.dataset import Dataset, get_all_dataset_names
         self.importDatasetMenu.clear()
         names = sorted(list(get_all_dataset_names()))
         for name in names:
@@ -2415,7 +2415,7 @@ class MainWindow(QMainWindow):
                 CURRENTCOUNTER += 1
                 self.mainwidget.setProgress(CURRENTCOUNTER/maxNumber * 100, True)
             return callback
-        from cryovia.gui.dataset import Dataset
+        from cryovia.cryovia_analysis.dataset import Dataset
         from cryovia.cryovia_analysis.analyser import Analyser, AnalyserWrapper
         global MAX_CORES
         dataset:Dataset = Dataset.load(dataset)
@@ -2449,7 +2449,7 @@ class MainWindow(QMainWindow):
 
     def loadDataset(self, name):
         global DISABLE_FUNCTION
-        from cryovia.gui.dataset import Dataset
+        from cryovia.cryovia_analysis.dataset import Dataset
         dataset:Dataset = Dataset.load(name)
         files = dataset.micrograph_paths
         if len(files) > 0:
