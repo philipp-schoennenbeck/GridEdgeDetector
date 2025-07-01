@@ -1,0 +1,12 @@
+LICENSE
+README.md
+setup.py
+ced.egg-info/PKG-INFO
+ced.egg-info/SOURCES.txt
+ced.egg-info/dependency_links.txt
+ced.egg-info/entry_points.txt
+ced.egg-info/requires.txt
+ced.egg-info/top_level.txt
+grid_edge_detector/__init__.py
+grid_edge_detector/carbon_edge_detector.py
+grid_edge_detector/image_gui.py

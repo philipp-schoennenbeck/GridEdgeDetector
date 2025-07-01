@@ -1,0 +1,2 @@
+[console_scripts]
+ged = grid_edge_detector.image_gui:main
